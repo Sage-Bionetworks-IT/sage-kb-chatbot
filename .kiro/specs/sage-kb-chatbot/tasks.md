@@ -2,7 +2,7 @@
 
 ## Task 1: Project Scaffolding and CDK Bootstrap
 
-- [ ] Initialize a Python CDK project using `cdk init app --language python`
+- [x] Initialize a Python CDK project using `cdk init app --language python`
 - [ ] Configure directory structure: `app.py` (entry point), `stacks/`, `constructs/`, `stages/`, `tests/`, `lambda/`, `containers/`
 - [ ] Set up `pyproject.toml` or `requirements.txt` with CDK dependencies: `aws-cdk-lib`, `constructs`, `cdk-iam-floyd`
 - [ ] Create a Python virtual environment and install dependencies
