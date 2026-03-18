@@ -1,11 +1,8 @@
 {
   "mcpServers": {
     "context7": {
-      "command": "uvx",
-      "args": ["context7-mcp-server@latest"],
-      "env": {
-        "FASTMCP_LOG_LEVEL": "ERROR"
-      },
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"],
       "disabled": false,
       "autoApprove": []
     },
