@@ -4,11 +4,11 @@
 
 - [x] Initialize a Python CDK project using `cdk init app --language python`
 - [x] Configure directory structure: `app.py` (entry point), `stacks/`, `constructs/`, `stages/`, `tests/`, `lambda/`, `containers/`
-- [ ] Set up `pyproject.toml` or `requirements.txt` with CDK dependencies: `aws-cdk-lib`, `constructs`, `cdk-iam-floyd`
-- [ ] Create a Python virtual environment and install dependencies
-- [ ] Create the CDK app entry point in `app.py` with environment-specific stack instantiation
-- [ ] Configure `.gitignore` for CDK artifacts, `__pycache__`, `.venv`, `cdk.out`
-- [ ] Verify `cdk synth` produces a valid empty template
+- [x] Set up `pyproject.toml` or `requirements.txt` with CDK dependencies: `aws-cdk-lib`, `constructs`, `cdk-iam-floyd`
+- [x] Create a Python virtual environment and install dependencies
+- [x] Create the CDK app entry point in `app.py` with environment-specific stack instantiation
+- [x] Configure `.gitignore` for CDK artifacts, `__pycache__`, `.venv`, `cdk.out`
+- [x] Verify `cdk synth` produces a valid empty template
 
 **References**: design.md §Architecture; requirements.md §7, §8
 
