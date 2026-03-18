@@ -1,0 +1,38 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Logs
+logs/
+*.log
+
+# Optional: Kiro settings (uncomment if you don't want to share MCP config)
+# .kiro/settings/
+
+# Backup files
+*.backup.*
+# Kiro settings (optional - remove if you want to share MCP config)
+# .kiro/settings/
+blog*
