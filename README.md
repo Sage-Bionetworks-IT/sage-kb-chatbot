@@ -17,6 +17,8 @@ Ingestion: EventBridge → Step Functions → ECS Fargate (connector workers)
                                               ├── Intranet
                                               └── PowerDMS
 ```
+![Sage KB Chatbot Architecture](docs/sage-kb-chatbot-architecture.png)
+
 
 ## Knowledge Sources (MVP)
 
@@ -34,59 +36,6 @@ Ingestion: EventBridge → Step Functions → ECS Fargate (connector workers)
 - Per-user and per-channel rate limiting
 - Independent connector enable/disable without redeployment
 
-## Tech Stack
+## Documentation
 
-- **IaC**: AWS CDK (Python)
-- **Runtime**: Python
-- **Compute**: AWS Lambda (Slack ingress), ECS Fargate (RAG orchestrator + connectors)
-- **Search**: Amazon OpenSearch Service
-- **Database**: Amazon RDS PostgreSQL
-- **LLM/Embeddings**: Amazon Bedrock (Titan Text Embeddings + generation model)
-- **Orchestration**: Step Functions, EventBridge, SQS
-- **Security**: Secrets Manager, KMS, IAM least-privilege, VPC private subnets
-
-## Project Structure
-
-```
-app.py                  # CDK app entry point
-stacks/                 # CDK stacks
-cdk_constructs/         # CDK constructs
-stages/                 # CDK stages
-lambda/
-  slack_ingress/        # Slack event receiver Lambda
-containers/
-  rag_orchestrator/     # RAG orchestrator ECS service
-  connectors/           # Source connector workers
-tests/                  # Unit and integration tests
-```
-
-## Getting Started
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-
-# Synthesize CloudFormation template (defaults to dev)
-cdk synth
-
-# Target a specific environment
-DEPLOY_ENV=staging cdk synth
-DEPLOY_ENV=prod cdk synth
-```
-
-## Running Tests
-
-```bash
-pytest -q
-```
-
-## Environments
-
-Set `DEPLOY_ENV` to target a specific environment:
-
-| Value     | Stack Name              |
-|-----------|-------------------------|
-| `dev`     | SageKbChatbot-Dev       |
-| `staging` | SageKbChatbot-Staging   |
-| `prod`    | SageKbChatbot-Prod      |
+- [Contributing](CONTRIBUTING.md) — setup instructions, project structure, coding standards, development workflow
