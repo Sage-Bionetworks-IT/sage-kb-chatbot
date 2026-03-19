@@ -11,11 +11,13 @@
       "**/*.tsx",
       "**/*.jsx",
       "**/*.py",
-      "**/*.json"
+      "**/*.json",
+      "**/*.yaml",
+      "**/*.yml"
     ]
   },
   "then": {
     "type": "askAgent",
-    "prompt": "A code file has been saved. Please:\n1. Run the appropriate linter (ESLint for JS/TS, flake8/pylint for Python)\n2. Run the appropriate formatter (Prettier for JS/TS, Black for Python)\n3. Fix any auto-fixable issues\n4. Report any remaining issues that need manual attention\n\nUse the project's existing configuration files (.eslintrc, .prettierrc, pyproject.toml, etc.) and follow the established coding standards."
+    "prompt": "A code file has been saved. Please:\n1. Run the appropriate linter (ESLint for JS/TS, flake8/pylint for Python)\n2. Run the appropriate formatter (Prettier for JS/TS, Black for Python)\n3. For JSON files: validate syntax and fix formatting (2-space indent, consistent quoting)\n4. For YAML files: validate syntax, fix formatting (2-space indent), and check for common issues (duplicate keys, incorrect indentation)\n5. Fix any auto-fixable issues\n6. Report any remaining issues that need manual attention\n\nUse the project's existing configuration files (.eslintrc, .prettierrc, pyproject.toml, etc.) and follow the established coding standards."
   }
 }
