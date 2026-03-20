@@ -36,3 +36,16 @@ logs/
 # Kiro settings (optional - remove if you want to share MCP config)
 # .kiro/settings/
 blog*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# CDK
+.cdk.staging/
+cdk.out/
+package-lock.json
