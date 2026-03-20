@@ -5,5 +5,5 @@ on:
   pull_request:
 
 jobs:
-  lambda-test:
+  testing:
     uses: "./.github/workflows/test.yaml"
