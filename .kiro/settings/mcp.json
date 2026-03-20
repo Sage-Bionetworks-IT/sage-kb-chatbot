@@ -36,7 +36,7 @@
       "args": [
         "awslabs.aws-serverless-mcp-server@latest"
       ],
-      "env": { 
+      "env": {
         "FASTMCP_LOG_LEVEL": "ERROR"
       }
     },
@@ -48,6 +48,6 @@
       },
       "disabled": false,
       "autoApprove": []
-    }    
+    }
   }
 }
