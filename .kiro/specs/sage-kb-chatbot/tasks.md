@@ -163,11 +163,12 @@
 
 - [ ] Implement user lookup by `slack_user_id` in PostgreSQL `users` table using `psycopg2` or `asyncpg`
 - [ ] Create user record on first interaction if not found (with Slack user info)
-- [ ] Resolve `identity_groups` for the user
-- [ ] Build authorization filter (list of permitted `visibility_scope` and `acl_tags` values)
+- [ ] Read `identity_groups` for the user (populated by the Slack User Groups sync job — see Task 21a)
+- [ ] Resolve permitted source scopes by joining `identity_groups` against `group_source_mapping` config table (see Task 21b)
+- [ ] Build authorization filter (list of permitted `visibility_scope` and `acl_tags` values) from resolved source scopes
 - [ ] Pass authorization context to the retrieval step
 
-**References**: requirements.md §12.1, §12.2, §5.6; design.md §Component 3
+**References**: requirements.md §12.1, §12.1.1, §12.2, §5.6; design.md §Component 3, §Component 4e
 
 ---
 
@@ -267,6 +268,44 @@
 - [ ] Write unit tests for feedback parsing and storage using `pytest`
 
 **References**: requirements.md §5.4, §14.3; design.md §Feedback Flow
+
+---
+
+## Task 21a: Identity Sync Worker — ECS Fargate Task and EventBridge Schedule
+
+- [ ] Create `constructs/identity_sync.py` construct
+- [ ] Create ECS Fargate task definition for the identity sync worker (CPU/memory: 0.25 vCPU, 0.5 GB)
+- [ ] Create container image project structure at `containers/identity_sync/` (Dockerfile, `main.py`, `requirements.txt`)
+- [ ] Implement sync logic:
+  1. Read `group_source_mapping` config from PostgreSQL
+  2. Call Slack `usergroups.list` to enumerate configured Slack User Groups
+  3. Call `usergroups.users.list` for each group to resolve current members
+  4. For each user, compute the set of authorization groups from group membership
+  5. Upsert `users` records: update `identity_groups` (JSONB) and `groups_synced_at`
+  6. Auto-create user records for new Slack users (populate email, display_name from Slack profile via `users.info`)
+- [ ] Respect Slack API rate limits (Tier 2: ~20 req/min) with exponential backoff
+- [ ] Log sync results: users updated, groups changed, errors encountered
+- [ ] Create EventBridge rule to trigger the task every 15 minutes via ECS RunTask
+- [ ] Grant task role permissions: Secrets Manager read (Slack bot token), RDS connect (read/write `users` and `group_source_mapping` tables), `logs:PutLogEvents`
+- [ ] Write unit tests `tests/test_identity_sync.py` for sync logic, rate limit handling, upsert behavior using `pytest`
+
+**References**: requirements.md §12.1, §12.1.1; design.md §Component 4e
+
+---
+
+## Task 21b: Group-to-Source-Scope Mapping Configuration Table
+
+- [ ] Add `group_source_mapping` table to the SQL migration files (Task 3):
+  - `id` (UUID PK)
+  - `slack_group_handle` (string, unique)
+  - `authorization_group` (string)
+  - `permitted_source_scopes` (JSONB — list of source scope identifiers)
+  - `enabled` (boolean, default true)
+  - `created_at`, `updated_at`
+- [ ] Seed initial mapping rows for MVP groups (e.g., `@sage-all` → `general` → all public sources)
+- [ ] Write fine-grained assertions test for the migration
+
+**References**: requirements.md §12.1.1; design.md §Component 4e, §Component 6
 
 ---
 
@@ -450,6 +489,8 @@
 - [ ] ECS RAG orchestrator role: `sqs:ReceiveMessage/DeleteMessage`, `secretsmanager:GetSecretValue`, `bedrock:InvokeModel`, OpenSearch data access, RDS connect, `logs:PutLogEvents`
 - [ ] ECS connector worker roles: source-specific secrets, `bedrock:InvokeModel`, OpenSearch data write, `s3:PutObject`, RDS connect, `logs:PutLogEvents`
 - [ ] EventBridge role: `ecs:RunTask` (scoped to connector task definitions)
+- [ ] ECS identity sync worker role: `secretsmanager:GetSecretValue` (scoped to Slack bot token), RDS connect (read/write `users` and `group_source_mapping`), `logs:PutLogEvents`
+- [ ] EventBridge identity sync role: `ecs:RunTask` (scoped to identity sync task definition)
 - [ ] Use `cdk-iam-floyd` for policy generation where applicable
 - [ ] Validate no `*` resource wildcards in production policies
 - [ ] Write fine-grained assertions test `tests/test_iam_policies.py`

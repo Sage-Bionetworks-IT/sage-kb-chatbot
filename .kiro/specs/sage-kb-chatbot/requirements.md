@@ -499,11 +499,30 @@ Requires explicit security/governance approval before indexing.
 ## 12. Security and Compliance
 
 ### 12.1 Identity Mapping
+The application shall use Slack as the identity anchor. Users authenticate to Slack via multiple federated identity providers; the system treats the Slack user ID as the common identity key regardless of upstream IdP.
+
 The application shall map:
-- Slack user ID
-- internal email/identity
-- authorization groups
-- permitted source scopes
+- Slack user ID (primary identity key)
+- internal email/identity (from Slack profile)
+- authorization groups (derived from Slack User Group membership)
+- permitted source scopes (derived from authorization groups)
+
+#### 12.1.1 Authorization Group Sync via Slack User Groups
+Slack User Groups (e.g., `@sage-all`, `@sage-engineering`, `@sage-hr-access`) shall serve as the source of truth for authorization group membership.
+
+The system shall:
+- Maintain a mapping from Slack User Groups to chatbot authorization groups (e.g., Slack group `@sage-hr-access` → authorization group `hr-content`)
+- Run a scheduled sync job (EventBridge → ECS Fargate task) every 15 minutes that:
+  1. Enumerates configured Slack User Groups via `usergroups.list` and `usergroups.users.list` APIs
+  2. For each user, resolves their current group memberships
+  3. Updates the `identity_groups` JSONB field on the `users` table in PostgreSQL
+- Auto-create user records on first sync if not already present (with Slack profile info: email, display name)
+- Log sync results (users updated, groups changed) for auditability
+- Respect Slack API rate limits (Tier 2: ~20 req/min for usergroups endpoints) with backoff
+
+Admins manage access by adding/removing users from Slack User Groups — no separate admin interface is required for MVP.
+
+The group-to-source-scope mapping shall be stored in a configuration table or environment config, allowing governance owners to adjust which groups grant access to which sources without code changes.
 
 ### 12.2 Access Controls
 The application shall enforce:
@@ -562,7 +581,8 @@ The ingestion subsystem shall separate:
 - `slack_user_id`
 - `email`
 - `display_name`
-- `identity_groups`
+- `identity_groups` (JSONB — list of authorization group names derived from Slack User Group membership, synced every 15 minutes)
+- `groups_synced_at` (timestamp — last time identity_groups was refreshed from Slack)
 - `created_at`
 - `updated_at`
 
@@ -666,6 +686,17 @@ Recommended fields:
 - `metrics`
 - `metadata`
 - `created_at`
+
+#### `group_source_mapping`
+Configuration table mapping Slack User Groups to chatbot authorization groups and permitted source scopes.
+
+- `id`
+- `slack_group_handle` (unique — e.g., `@sage-hr-access`)
+- `authorization_group` (e.g., `hr-content`)
+- `permitted_source_scopes` (JSONB — list of source scope identifiers, e.g., `["powerdms-hr", "confluence-hr-space"]`)
+- `enabled`
+- `created_at`
+- `updated_at`
 
 #### `queries`
 - `id`

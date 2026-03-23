@@ -65,6 +65,11 @@ graph TD
         ConnectorECS["ECS Fargate<br/>(Connector Workers)<br/>on-demand"]
     end
 
+    subgraph Identity["Identity Sync"]
+        IdentitySyncEB["EventBridge<br/>(every 15 min)"]
+        IdentitySyncECS["ECS Fargate<br/>(Identity Sync Worker)"]
+    end
+
     subgraph Security["Security & Observability"]
         SecretsManager["Secrets Manager"]
         KMS["KMS"]
@@ -88,8 +93,13 @@ graph TD
     ConnectorECS --> S3
     ConnectorECS --> Bedrock
 
+    IdentitySyncEB -->|ECS RunTask| IdentitySyncECS
+    IdentitySyncECS -->|Slack API| SlackApp
+    IdentitySyncECS --> RDS
+
     ECS --> SecretsManager
     ConnectorECS --> SecretsManager
+    IdentitySyncECS --> SecretsManager
     Lambda --> SecretsManager
 ```
 
@@ -138,7 +148,7 @@ graph TD
 
 **Responsibilities**:
 - Poll SQS for incoming query messages
-- Map Slack user ID to internal identity and authorization groups
+- Map Slack user ID to internal identity and authorization groups (read from `users.identity_groups`, populated by the Slack User Groups sync job)
 - Enforce per-user and per-channel rate limits
 - Use LlamaIndex's retriever (backed by `OpensearchVectorStore`) to generate query embeddings and execute hybrid search with `MetadataFilters` for authorization
 - Apply custom `NodePostprocessor` for source authority ranking and freshness boost
@@ -207,6 +217,33 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 
 ---
 
+### Component 4e: Identity Sync Worker (ECS Fargate, on-demand)
+
+**Purpose**: Synchronizes Slack User Group membership to the `users.identity_groups` field in PostgreSQL, providing the authorization context used at query time.
+
+**Schedule**: EventBridge triggers an ECS Fargate task every 15 minutes.
+
+**Responsibilities**:
+- Call Slack `usergroups.list` to enumerate configured Slack User Groups
+- Call `usergroups.users.list` for each group to resolve current members
+- For each user, compute the set of authorization groups from group membership
+- Upsert `users` records in PostgreSQL: update `identity_groups` (JSONB) and `groups_synced_at`
+- Auto-create user records for new Slack users discovered during sync (populate email, display_name from Slack profile)
+- Respect Slack API rate limits (Tier 2: ~20 req/min) with exponential backoff
+- Log sync results: users updated, groups changed, errors encountered
+
+**Configuration**:
+- The mapping from Slack User Groups to chatbot authorization groups is stored in the `group_source_mapping` configuration table in PostgreSQL (see Component 6)
+- Admins manage access by adding/removing users from Slack User Groups — no separate admin UI required for MVP
+
+**Interactions**:
+- Triggered by: EventBridge (every 15 minutes, ECS RunTask)
+- Reads from: Slack API (`usergroups.list`, `usergroups.users.list`), Secrets Manager (Slack bot token)
+- Writes to: RDS PostgreSQL (`users` table)
+- Reads from: RDS PostgreSQL (`group_source_mapping` config)
+
+---
+
 ### Component 5: OpenSearch Service (Hybrid Search Index)
 
 **Purpose**: Stores document chunks with both text content and vector embeddings, supporting hybrid keyword + semantic search with metadata filtering. Managed via LlamaIndex's `OpensearchVectorStore` abstraction.
@@ -233,12 +270,13 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 **Purpose**: Persistent store for user identity mappings, document metadata, ingestion state, query audit logs, and feedback.
 
 **Responsibilities**:
-- Store and query user identity mappings and authorization groups
+- Store and query user identity mappings and authorization groups (synced from Slack User Groups every 15 minutes)
 - Track document metadata and chunk references
 - Maintain connector operational state (`connector_status`)
 - Append ingestion run history (`ingestion_runs`)
 - Log all queries with retrieved sources, answers, confidence, and latency
 - Store user feedback
+- Store `group_source_mapping` configuration: maps Slack User Group handles to chatbot authorization groups and permitted source scopes (e.g., Slack group `@sage-hr-access` → authorization group `hr-content` → source scopes `[powerdms-hr, confluence-hr-space]`). Governance owners can update this mapping without code changes.
 
 ---
 
@@ -366,6 +404,17 @@ erDiagram
         string email UK
         string display_name
         jsonb identity_groups
+        timestamp groups_synced_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    group_source_mapping {
+        uuid id PK
+        string slack_group_handle UK
+        string authorization_group
+        jsonb permitted_source_scopes
+        boolean enabled
         timestamp created_at
         timestamp updated_at
     }
@@ -570,7 +619,7 @@ erDiagram
 - **Encryption**: All data encrypted at rest (S3 SSE-KMS, RDS encryption, OpenSearch encryption) and in transit (TLS everywhere).
 - **Secrets**: All credentials (Slack tokens, source system API keys, database passwords) stored exclusively in AWS Secrets Manager, rotated on schedule.
 - **IAM**: Least-privilege IAM roles per component. Lambda, ECS tasks, and EventBridge each get scoped roles with only the permissions they need.
-- **Identity mapping**: Slack user IDs mapped to internal identity and authorization groups. Authorization filters applied at query time to OpenSearch results.
+- **Identity mapping**: Slack user IDs are the primary identity key (users authenticate via multiple federated IdPs). Authorization groups are derived from Slack User Group membership, synced to PostgreSQL every 15 minutes via a scheduled ECS Fargate task. Authorization filters are applied at query time to OpenSearch results based on the user's `identity_groups`.
 - **Prompt injection defense**: Retrieved content treated as data, not instructions. System prompt is hardcoded and not overridable by source content. Hidden markup and suspicious patterns sanitized before prompt assembly.
 - **Audit trail**: All queries, retrieved sources, answers, and feedback logged to PostgreSQL. CloudTrail enabled for AWS API activity. Audit logs retained for 90 days per governance policy.
 - **Network**: ECS tasks, RDS, and OpenSearch deployed in private subnets. API Gateway is the only public-facing endpoint. VPC endpoints used for AWS service communication where supported.

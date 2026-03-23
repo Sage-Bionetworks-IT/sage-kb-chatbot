@@ -18,6 +18,8 @@ Ingestion: EventBridge → ECS Fargate (connector workers)
                                               ├── GitHub
                                               ├── Intranet
                                               └── PowerDMS
+
+Identity: EventBridge (every 15 min) → ECS Fargate (Slack User Groups sync → PostgreSQL)
 ```
 ![Sage KB Chatbot Architecture](docs/sage-kb-chatbot-architecture.png)
 
@@ -38,6 +40,7 @@ Ingestion: EventBridge → ECS Fargate (connector workers)
 - Grounded answers with source citations and confidence levels
 - Hybrid search (keyword + vector) with source authority ranking
 - Permission-aware retrieval
+- Slack User Groups-based identity sync for authorization (scheduled every 15 min)
 - Auditable queries, feedback, and ingestion history
 - Per-user and per-channel rate limiting
 - Independent connector enable/disable without redeployment
