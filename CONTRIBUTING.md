@@ -2,6 +2,23 @@
 
 Thank you for your interest in contributing to the Sage Internal Knowledge Slack Chatbot! This guide covers everything you need to get started.
 
+## Documentation
+
+Before diving in, familiarize yourself with the project specs:
+
+- [Requirements](.kiro/specs/sage-kb-chatbot/requirements.md) — functional and non-functional requirements, data model, security, rollout plan
+- [Design](.kiro/specs/sage-kb-chatbot/design.md) — architecture, component interfaces, data flows, error handling
+- [Tasks](.kiro/specs/sage-kb-chatbot/tasks.md) — implementation task breakdown
+
+
+## Project Structure
+
+```
+.kiro/specs/            # Requirements, design, and task specs
+.kiro/steering/         # Steering documents for Kiro IDE
+.kiro/hooks/            # Agent hooks for Kiro IDE
+```
+
 ## Coding Standards
 
 - Follow PEP 8 for Python code
@@ -9,14 +26,6 @@ Thank you for your interest in contributing to the Sage Internal Knowledge Slack
 - Keep functions small and focused
 - Use meaningful variable and function names
 - Add docstrings to public functions and classes
-
-### CDK Conventions
-
-- Use `cdk-iam-floyd` for IAM policy generation
-- Do not use CDK context for configuration — use environment variables or stack props
-- Constructs should not import resources (e.g., `Vpc.fromLookup()`); stacks handle imports
-- Constructs should save incoming props as a private field and create resources in protected methods
-- Use `PythonFunction` or `NodejsFunction` for Lambda handlers
 
 ### Commit Messages
 
@@ -115,7 +124,7 @@ Agent hooks (`.kiro/hooks/*.kiro.hook`) automate actions on IDE events:
 
 ### High Priority
 
-- Connector implementations (Confluence, GitHub, Intranet, PowerDMS)
+- Connector implementations (Confluence, Jira, GitHub, Intranet, PowerDMS)
 - RAG orchestrator query pipeline
 - OpenSearch index configuration and hybrid search
 - Observability and alerting constructs
