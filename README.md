@@ -11,7 +11,7 @@ Slack → API Gateway → Lambda (ingress) → SQS → ECS Fargate (RAG orchestr
                                                       ├── Amazon Bedrock (embeddings + LLM)
                                                       └── Slack API (response)
 
-Ingestion: EventBridge → Step Functions → ECS Fargate (connector workers)
+Ingestion: EventBridge → ECS Fargate (connector workers)
                                               ├── Confluence
                                               ├── Slack
                                               ├── Jira
@@ -33,6 +33,8 @@ Ingestion: EventBridge → Step Functions → ECS Fargate (connector workers)
 
 ## Key Capabilities
 
+- RAG pipeline built on LlamaIndex (ingestion, chunking, embedding, retrieval, generation)
+- Pre-built LlamaHub readers for Confluence, Slack, Jira, GitHub, and web sources
 - Grounded answers with source citations and confidence levels
 - Hybrid search (keyword + vector) with source authority ranking
 - Permission-aware retrieval

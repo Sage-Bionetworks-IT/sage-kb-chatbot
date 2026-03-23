@@ -5,6 +5,8 @@
 - [ ] Initialize a Python CDK project using `cdk init app --language python`
 - [ ] Configure directory structure: `app.py` (entry point), `stacks/`, `constructs/`, `stages/`, `tests/`, `lambda/`, `containers/`
 - [ ] Set up `pyproject.toml` or `requirements.txt` with CDK dependencies: `aws-cdk-lib`, `constructs`, `cdk-iam-floyd`
+- [ ] Add LlamaIndex dependencies: `llama-index`, `llama-index-vector-stores-opensearch`, `llama-index-embeddings-bedrock`, `llama-index-llms-bedrock`
+- [ ] Add LlamaHub reader dependencies: `llama-index-readers-confluence`, `llama-index-readers-slack`, `llama-index-readers-jira`, `llama-index-readers-github`, `llama-index-readers-web`
 - [ ] Create a Python virtual environment and install dependencies
 - [ ] Create the CDK app entry point in `app.py` with environment-specific stack instantiation
 - [ ] Configure `.gitignore` for CDK artifacts, `__pycache__`, `.venv`, `cdk.out`
@@ -183,42 +185,37 @@
 
 ---
 
-## Task 14: RAG Orchestrator — Query Embedding Generation
+## Task 14: RAG Orchestrator — Query Retrieval via LlamaIndex
 
-- [ ] Implement Bedrock client for Amazon Titan Text Embeddings using `boto3`
-- [ ] Normalize user query text (trim, lowercase, remove excess whitespace)
-- [ ] Call Bedrock `invoke_model` with the Titan Text Embeddings model to generate query vector
-- [ ] Implement retry with exponential backoff (up to 3 attempts) on Bedrock errors
-- [ ] Return embedding vector for use in hybrid search
-- [ ] Write unit tests with mocked Bedrock client using `pytest` and `unittest.mock`
+- [ ] Configure LlamaIndex retriever backed by `OpensearchVectorStore` with `BedrockEmbedding` for automatic query embedding
+- [ ] Configure hybrid search mode (keyword + vector) on the retriever
+- [ ] Implement retry with exponential backoff (up to 3 attempts) on Bedrock/OpenSearch errors
+- [ ] Write unit tests with mocked retriever using `pytest` and `unittest.mock`
 
-**References**: requirements.md §9.2, §9.5; design.md §Component 7
+**References**: requirements.md §9.2, §9.5; design.md §Component 3, §Component 7
 
 ---
 
-## Task 15: RAG Orchestrator — Hybrid Search (OpenSearch)
+## Task 15: RAG Orchestrator — Hybrid Search and Post-Processing
 
-- [ ] Implement OpenSearch client using `opensearch-py` with IAM-based or fine-grained access auth
-- [ ] Build hybrid query combining: BM25 keyword search on `content`, k-NN vector search on `embedding`, metadata filters (`source_system`, `visibility_scope`, `acl_tags`)
-- [ ] Apply authorization filters from the user's identity context
-- [ ] Combine lexical and semantic scores (e.g., weighted sum or RRF)
-- [ ] Apply source authority ranking boost based on `authoritative_rank`
-- [ ] Apply freshness boost based on `last_updated`
-- [ ] Return top-K ranked chunks with metadata
-- [ ] Write unit tests with mocked OpenSearch client using `pytest`
+- [ ] Configure `OpensearchVectorStore` retriever with hybrid mode combining BM25 keyword search and k-NN vector search
+- [ ] Apply authorization filters via `MetadataFilters` (`visibility_scope`, `acl_tags`) from the user's identity context
+- [ ] Implement custom `NodePostprocessor` for source authority ranking boost based on `authoritative_rank`
+- [ ] Implement custom `NodePostprocessor` for freshness boost based on `last_updated`
+- [ ] Implement custom `NodePostprocessor` for authorization filtering
+- [ ] Return top-K ranked nodes with metadata
+- [ ] Write unit tests for each `NodePostprocessor` and retriever configuration using `pytest`
 
-**References**: requirements.md §9.2, §10.2, §10.3; design.md §Component 5
+**References**: requirements.md §9.2, §10.2, §10.3; design.md §Component 3, §Component 5
 
 ---
 
 ## Task 16: RAG Orchestrator — Prompt Assembly
 
-- [ ] Build system prompt with grounding rules, citation instructions, refusal rules, and confidence assessment instructions
-- [ ] Assemble user prompt with: the question, top retrieved chunks (with source metadata), answering rules
-- [ ] Include source metadata per chunk: title, source_system, source_url, last_updated
-- [ ] Enforce token budget: truncate or drop lowest-ranked chunks if prompt exceeds model context window
-- [ ] Implement prompt injection defense: sanitize chunk content (strip hidden markup, suspicious patterns)
-- [ ] Write unit tests for prompt construction and sanitization using `pytest`
+- [ ] Define LlamaIndex `PromptTemplate` with: grounding rules, citation instructions, refusal rules, confidence assessment instructions, and prompt injection defenses
+- [ ] Configure the template to include the user question and top retrieved nodes with source metadata (title, source_system, source_url, last_updated)
+- [ ] Enforce token budget: truncate or drop lowest-ranked nodes if prompt exceeds model context window
+- [ ] Write unit tests for prompt template output and sanitization using `pytest`
 
 **References**: requirements.md §9.3, §15.1, §15.2, §12.5; design.md §Component 3
 
@@ -226,12 +223,12 @@
 
 ## Task 17: RAG Orchestrator — LLM Answer Generation
 
-- [ ] Implement Bedrock client for the generation model using `boto3` (model TBD — e.g., Claude 3 Sonnet/Haiku via Bedrock)
-- [ ] Call Bedrock `invoke_model` with the assembled prompt
+- [ ] Configure LlamaIndex's `Bedrock` LLM class for the generation model (e.g., Claude 3 Sonnet/Haiku via Bedrock)
+- [ ] Invoke the LLM via LlamaIndex with the assembled `PromptTemplate`
 - [ ] Parse LLM response: extract answer text, cited source references, uncertainty notes
 - [ ] Assign confidence level (High/Medium/Low) based on: relevance scores, source agreement, source authority, answer completeness
 - [ ] Implement retry with exponential backoff on Bedrock errors
-- [ ] Write unit tests with mocked Bedrock client using `pytest`
+- [ ] Write unit tests with mocked LLM class using `pytest`
 
 **References**: requirements.md §9.4, §15.3; design.md §Component 7, §Error Scenario 5
 
@@ -283,59 +280,56 @@
   - GitHub: every 1 hour
   - Intranet: every 12 hours
   - PowerDMS: every 12 hours
-- [ ] Each rule targets the corresponding Step Functions state machine
+- [ ] Each rule targets the corresponding connector ECS Fargate task directly via ECS RunTask target
 - [ ] Write fine-grained assertions test `tests/test_ingestion_scheduler.py`
 
 **References**: requirements.md §6.4; design.md §Component 4a
 
 ---
 
-## Task 22: Ingestion Pipeline — Step Functions Orchestrator
+## Task 22: Ingestion Pipeline — Connector Self-Management
 
-- [ ] Create `constructs/ingestion_orchestrator.py` construct
-- [ ] Define Step Functions state machine per connector type
-- [ ] Steps: create `ingestion_runs` record (status: running) → launch connector worker ECS task → wait for completion → update `ingestion_runs` status → update `connector_status`
-- [ ] Handle worker failures: mark run as failed, increment `consecutive_failures`, log error details
+- [ ] Implement self-management logic in the base connector framework (`containers/connectors/base_connector/`)
+- [ ] At startup: create `ingestion_runs` record (status: running), determine run type (full vs. incremental based on `last_cursor`)
+- [ ] On success: update `ingestion_runs` status to `succeeded`, update `connector_status` (last_success_at, reset consecutive_failures, update lag/counts)
+- [ ] On failure: update `ingestion_runs` status to `failed`, increment `consecutive_failures` on `connector_status`, log error details
 - [ ] Support run types: full, incremental (based on `last_cursor`)
-- [ ] Grant Step Functions role permissions to run ECS tasks, write to RDS (via Lambda helper or direct SDK)
-- [ ] Write fine-grained assertions test `tests/test_ingestion_orchestrator.py`
+- [ ] Grant ECS connector worker task role permissions to write to RDS
+- [ ] Write unit tests for self-management lifecycle (start, success, failure) using `pytest`
 
 **References**: requirements.md §13.0, §13.1 (connector_status, ingestion_runs); design.md §Component 4b, §Ingestion Flow
 
 ---
 
-## Task 23: Connector — Base Connector Framework
+## Task 23: Connector — Base Connector Framework (LlamaIndex IngestionPipeline)
 
 - [ ] Create shared connector base in `containers/connectors/base_connector/`
-- [ ] Define abstract base class with methods: `fetch()`, `normalize()`, `extract_metadata()`, `chunk()`, `embed()`, `index()`, `store_snapshot()`
-- [ ] Implement semantic/structure-first chunking logic per requirements §9.6:
-  - Split on document boundaries (headings, sections, FAQ items, procedure blocks)
-  - Sub-split large sections by paragraph/sentence-safe boundaries
-  - Preserve heading path metadata on every chunk
-  - Target ~450–650 tokens, hard max ~900 tokens, ~75 token overlap for narrative splits
-- [ ] Implement embedding generation via Bedrock Titan Text Embeddings using `boto3` (batch where possible)
-- [ ] Implement OpenSearch bulk indexing using `opensearch-py`
-- [ ] Implement S3 snapshot storage using `boto3`
-- [ ] Implement PostgreSQL document/chunk metadata upsert using `psycopg2` or `SQLAlchemy`
-- [ ] Implement change detection via document `hash` comparison
-- [ ] Write unit tests for chunking, embedding call, indexing, and change detection using `pytest`
+- [ ] Configure LlamaIndex `IngestionPipeline` with:
+  - Node parser for chunking (semantic/structure-first per requirements §9.6): `MarkdownNodeParser` for Markdown/Confluence/GitHub, `SentenceSplitter` for general text, optionally `SemanticSplitterNodeParser` for unstructured content
+  - `BedrockEmbedding` (Amazon Titan Text Embeddings) for embedding generation
+  - `OpensearchVectorStore` for indexing
+  - Content-hash deduplication to skip unchanged documents
+- [ ] Configure node parser settings: target ~450–650 tokens, hard max ~900 tokens, ~75 token overlap for narrative splits
+- [ ] Implement S3 snapshot storage (custom step, outside LlamaIndex pipeline) using `boto3`
+- [ ] Implement PostgreSQL document/chunk metadata upsert (custom step) using `psycopg2` or `SQLAlchemy`
+- [ ] Define abstract base class with methods: `fetch()` (returns LlamaIndex `Document` objects), `store_snapshot()`, `update_metadata()`
+- [ ] Write unit tests for `IngestionPipeline` configuration, node parser settings, and change detection using `pytest`
 
-**References**: requirements.md §9.1, §9.6; design.md §Component 4c
+**References**: requirements.md §9.0, §9.1, §9.6; design.md §Component 4c
 
 ---
 
 ## Task 24: Connector — Confluence
 
 - [ ] Create `containers/connectors/confluence_connector/` with handler
-- [ ] Implement Confluence REST API client (authenticated via Secrets Manager credentials) using `requests` or `httpx`
-- [ ] Fetch pages across all spaces: body (storage format), title, canonical URL, last modified, space metadata
-- [ ] Implement update detection (compare `last_updated` or content hash)
-- [ ] Extract permission metadata where available
-- [ ] Normalize Confluence storage format HTML to markdown/text using `beautifulsoup4` or `markdownify`
-- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
-- [ ] Support incremental sync using Confluence CQL `lastModified` filter
+- [ ] Configure `ConfluenceReader` from LlamaHub with Confluence credentials from Secrets Manager
+- [ ] Fetch pages across all spaces using the reader; reader returns `Document` objects with body, title, URL, and metadata
+- [ ] Implement incremental sync by filtering on `lastModified` (custom logic wrapping the reader)
+- [ ] Extract permission metadata where available and attach to document metadata
+- [ ] Feed documents into the shared `IngestionPipeline` (base connector framework)
+- [ ] Store normalized snapshots in S3 (custom step)
 - [ ] Create ECS Fargate task definition for this connector (on-demand, cold start OK)
-- [ ] Write unit tests for Confluence API parsing, normalization, update detection using `pytest`
+- [ ] Write unit tests for reader configuration, incremental sync logic, and metadata extraction using `pytest`
 
 **References**: requirements.md §11.1; design.md §Component 4c
 
@@ -344,20 +338,19 @@
 ## Task 25: Connector — Slack
 
 - [ ] Create `containers/connectors/slack_connector/` with handler
-- [ ] Implement Slack Conversations API client (authenticated via Slack bot token from Secrets Manager) using `slack_sdk`
-- [ ] Enumerate public channels using `conversations.list` (exclude archived channels)
-- [ ] For each channel: fetch message history and threaded replies using `conversations.history` and `conversations.replies`
-- [ ] Filter out bot messages, ephemeral messages, and system messages (join/leave/topic changes)
-- [ ] Extract per-message: text, author (Slack user ID), channel name, thread parent, permalink, timestamp
-- [ ] Group threaded conversations into single documents (parent message + replies)
-- [ ] Implement incremental sync using cursor-based pagination and `oldest` timestamp parameter (track `last_cursor` per channel)
-- [ ] Respect Slack API rate limits (Tier 3: ~50 req/min for conversations.history) with backoff
-- [ ] Normalize message content: resolve user mentions (`<@U123>` → display name), channel references, emoji shortcodes
+- [ ] Configure `SlackReader` from LlamaHub with Slack bot token from Secrets Manager
+- [ ] Enumerate public channels using `conversations.list` (exclude archived channels) — custom logic wrapping the reader
+- [ ] Use `SlackReader` to fetch message history per channel; supplement with custom logic for threaded replies (`conversations.replies`)
+- [ ] Filter out bot messages, ephemeral messages, and system messages (custom post-processing)
+- [ ] Group threaded conversations into single `Document` objects (parent message + replies) — custom logic
+- [ ] Implement incremental sync using `oldest` timestamp parameter (track `last_cursor` per channel) — custom logic
+- [ ] Respect Slack API rate limits (Tier 3: ~50 req/min) with backoff
+- [ ] Normalize message content: resolve user mentions, channel references, emoji shortcodes
 - [ ] Set `authoritative_rank` to 6 (below intranet, above "other supporting content")
-- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
+- [ ] Feed documents into the shared `IngestionPipeline` (base connector framework)
 - [ ] Support channel-scoped ingestion and status tracking (one `connector_status` row per channel)
 - [ ] Create ECS Fargate task definition for this connector
-- [ ] Write unit tests for Slack API parsing, message normalization, thread grouping, incremental sync using `pytest`
+- [ ] Write unit tests for reader configuration, thread grouping, incremental sync, message normalization using `pytest`
 
 **References**: requirements.md §11.5; design.md §Component 4c
 
@@ -366,20 +359,17 @@
 ## Task 26: Connector — Jira
 
 - [ ] Create `containers/connectors/jira_connector/` with handler
-- [ ] Implement Jira REST API client (authenticated via API token or OAuth from Secrets Manager) using `requests` or `httpx`
-- [ ] Enumerate all projects using Jira REST API
-- [ ] For each project: fetch issues with summary, description, comments, status, priority, labels, assignee, reporter
-- [ ] Implement incremental sync using JQL `updated >= "last_cursor"` filter
-- [ ] Extract canonical issue URL (permalink) for each issue
-- [ ] Normalize Jira wiki markup / ADF (Atlassian Document Format) to markdown/text
-- [ ] Concatenate issue description + comments into a single document per issue for chunking
-- [ ] Implement update detection via `updated` timestamp comparison
+- [ ] Configure `JiraReader` from LlamaHub with Jira credentials from Secrets Manager
+- [ ] Use `JiraReader` to fetch issues with summary, description, and metadata
+- [ ] Implement incremental sync using JQL `updated >= "last_cursor"` filter — custom logic wrapping the reader
+- [ ] Implement comment aggregation: concatenate issue description + comments into a single `Document` per issue — custom logic
+- [ ] Normalize Jira wiki markup / ADF to markdown/text (supplement reader output if needed)
 - [ ] Extract permission metadata where available (project-level visibility)
 - [ ] Set `authoritative_rank` to 3 (below Confluence, above GitHub)
-- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
+- [ ] Feed documents into the shared `IngestionPipeline` (base connector framework)
 - [ ] Support project-scoped ingestion and status tracking (one `connector_status` row per project)
 - [ ] Create ECS Fargate task definition for this connector
-- [ ] Write unit tests for Jira API parsing, wiki markup normalization, incremental sync, comment aggregation using `pytest`
+- [ ] Write unit tests for reader configuration, incremental sync, comment aggregation using `pytest`
 
 **References**: requirements.md §11.6; design.md §Component 4c
 
@@ -388,15 +378,14 @@
 ## Task 27: Connector — GitHub
 
 - [ ] Create `containers/connectors/github_connector/` with handler
-- [ ] Implement GitHub API client (GitHub App auth via Secrets Manager) using `PyGithub` or `httpx`
-- [ ] Enumerate repos under `Sage-Bionetworks` and `Sage-Bionetworks-IT` orgs
-- [ ] For each repo: fetch README, Markdown files in `docs/` directories, repository metadata
-- [ ] Implement revision tracking (compare commit SHA or file hash)
+- [ ] Configure `GithubRepositoryReader` from LlamaHub with GitHub App credentials from Secrets Manager
+- [ ] Enumerate repos under `Sage-Bionetworks` and `Sage-Bionetworks-IT` orgs — custom logic
+- [ ] Use `GithubRepositoryReader` per repo to fetch README, Markdown files in `docs/` directories, and repository metadata
+- [ ] Implement revision tracking (compare commit SHA or file hash) — custom logic
 - [ ] Support repository-scoped ingestion and status tracking (one `connector_status` row per repo)
-- [ ] Normalize Markdown content, preserve code blocks with context
-- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
+- [ ] Feed documents into the shared `IngestionPipeline` (base connector framework)
 - [ ] Create ECS Fargate task definition for this connector
-- [ ] Write unit tests for GitHub API parsing, repo enumeration, revision detection using `pytest`
+- [ ] Write unit tests for reader configuration, repo enumeration, revision detection using `pytest`
 
 **References**: requirements.md §11.2; design.md §Component 4c
 
@@ -405,14 +394,13 @@
 ## Task 28: Connector — Intranet
 
 - [ ] Create `containers/connectors/intranet_connector/` with handler
-- [ ] Implement HTML crawl or API fetch (depending on intranet technology) using `requests`/`httpx` and `beautifulsoup4`
-- [ ] Remove boilerplate (nav, footer, sidebar) to extract main content
-- [ ] Extract canonical URL, content ownership metadata
-- [ ] Implement update detection (content hash or last-modified header)
-- [ ] Normalize HTML to markdown/text
-- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
+- [ ] Configure `BeautifulSoupWebReader` or `SimpleWebPageReader` from LlamaHub for HTML content fetching
+- [ ] Implement custom post-processing to remove boilerplate (nav, footer, sidebar) from reader output
+- [ ] Extract canonical URL, content ownership metadata and attach to document metadata
+- [ ] Implement update detection (content hash or last-modified header) — custom logic
+- [ ] Feed documents into the shared `IngestionPipeline` (base connector framework)
 - [ ] Create ECS Fargate task definition for this connector
-- [ ] Write unit tests for HTML parsing, boilerplate removal, normalization using `pytest`
+- [ ] Write unit tests for reader configuration, boilerplate removal, update detection using `pytest`
 
 **References**: requirements.md §11.3; design.md §Component 4c
 ---
@@ -420,14 +408,14 @@
 ## Task 29: Connector — PowerDMS
 
 - [ ] Create `containers/connectors/powerdms_connector/` with handler
-- [ ] Implement PowerDMS API client (authenticated via Secrets Manager) using `requests` or `httpx`
-- [ ] Fetch: title, version, approval date, document type, canonical link, document content
-- [ ] Implement update detection (version comparison or content hash)
-- [ ] Normalize document content to text/markdown
+- [ ] Implement custom `BaseReader` (LlamaIndex interface) for PowerDMS since no LlamaHub reader exists
+- [ ] Authenticate via Secrets Manager credentials; fetch title, version, approval date, document type, canonical link, document content
+- [ ] Return `Document` objects with text and metadata from the custom reader
+- [ ] Implement update detection (version comparison or content hash) — custom logic
 - [ ] Set `authoritative_rank` to highest tier (PowerDMS SOPs are rank 1)
-- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
+- [ ] Feed documents into the shared `IngestionPipeline` (base connector framework)
 - [ ] Create ECS Fargate task definition for this connector
-- [ ] Write unit tests for PowerDMS API parsing, version detection using `pytest`
+- [ ] Write unit tests for custom reader, PowerDMS API parsing, version detection using `pytest`
 
 **References**: requirements.md §11.4, §10.3; design.md §Component 4c
 
@@ -436,7 +424,7 @@
 ## Task 30: Observability — CloudWatch Metrics, Logs, and Alarms
 
 - [ ] Create `constructs/observability.py` construct
-- [ ] Configure CloudWatch log groups for: Lambda, ECS tasks (RAG orchestrator + connectors), Step Functions
+- [ ] Configure CloudWatch log groups for: Lambda, ECS tasks (RAG orchestrator + connectors)
 - [ ] Publish custom metrics: request volume, median/p95 latency, no-answer rate, low-confidence rate, retrieval hit count, ingestion freshness lag, user feedback ratio
 - [ ] Create CloudWatch alarms for:
   - Connector failures (consecutive_failures threshold)
@@ -461,7 +449,7 @@
 - [ ] Lambda ingress role: only `sqs:SendMessage`, `secretsmanager:GetSecretValue` (scoped to Slack secret)
 - [ ] ECS RAG orchestrator role: `sqs:ReceiveMessage/DeleteMessage`, `secretsmanager:GetSecretValue`, `bedrock:InvokeModel`, OpenSearch data access, RDS connect, `logs:PutLogEvents`
 - [ ] ECS connector worker roles: source-specific secrets, `bedrock:InvokeModel`, OpenSearch data write, `s3:PutObject`, RDS connect, `logs:PutLogEvents`
-- [ ] Step Functions role: `ecs:RunTask`, `logs:PutLogEvents`
+- [ ] EventBridge role: `ecs:RunTask` (scoped to connector task definitions)
 - [ ] Use `cdk-iam-floyd` for policy generation where applicable
 - [ ] Validate no `*` resource wildcards in production policies
 - [ ] Write fine-grained assertions test `tests/test_iam_policies.py`

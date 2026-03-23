@@ -5,6 +5,7 @@
 - **Target Environment**: AWS
 - **Primary Interface**: Slack
 - **Architecture Pattern**: Retrieval-Augmented Generation (RAG)
+- **RAG Framework**: LlamaIndex
 - **Search Engine**: Amazon OpenSearch Service
 - **LLM Platform**: Amazon Bedrock
 - **Development Language**: Python
@@ -224,8 +225,6 @@ Data Plane
 
 Ingestion Plane
   ├─ EventBridge
-  ├─ Step Functions
-  ├─ AWS Lambda connector dispatch jobs
   └─ Amazon ECS on Fargate connector/ingestion tasks (cold start on demand)
 ```
 
@@ -240,6 +239,7 @@ Ingestion Plane
 - Heavy RAG orchestration on Amazon ECS on Fargate
 - Async handoff between Slack ingress and answer generation
 - Keep at least 1–2 warm Amazon ECS on Fargate tasks for the main chatbot service
+- Use LlamaIndex as the RAG framework for ingestion, chunking, embedding, indexing, and retrieval where practical; custom code only where LlamaIndex abstractions are insufficient (authorization filtering, source authority ranking, audit logging, confidence scoring)
 
 ---
 
@@ -253,7 +253,6 @@ Ingestion Plane
 - Amazon RDS for PostgreSQL
 - Amazon S3
 - Amazon Bedrock
-- AWS Step Functions
 - Amazon SQS (async handoff between AWS Lambda and Amazon ECS on Fargate)
 - Amazon EventBridge
 - AWS Secrets Manager
@@ -262,6 +261,7 @@ Ingestion Plane
 - AWS CloudTrail
 
 ### 8.2 Optional Later Services
+- AWS Step Functions (complex multi-step orchestration if needed in future)
 - Amazon ElastiCache for Redis
 - AWS WAF
 - Amazon Macie
@@ -273,62 +273,90 @@ Ingestion Plane
 
 ## 9. RAG Design
 
+### 9.0 RAG Framework
+The system shall use **LlamaIndex** as the RAG framework for ingestion, retrieval, and query orchestration.
+
+LlamaIndex provides:
+- Pre-built data connectors (Readers) for Confluence, Slack, Jira, GitHub, and web crawling
+- Configurable chunking via node parsers (`MarkdownNodeParser`, `SentenceSplitter`, `SemanticSplitterNodeParser`)
+- Embedding integration via `BedrockEmbedding`
+- Vector store integration via `OpensearchVectorStore`
+- Retrieval with `VectorIndexRetriever` and hybrid search support
+- LLM integration via `Bedrock` LLM class
+- `IngestionPipeline` with built-in document deduplication via content hash
+- Extension points: custom `BaseReader` for unsupported sources, `NodePostprocessor` for custom ranking/filtering, `PromptTemplate` for prompt customization
+
+Custom code is required for:
+- Authorization filtering (custom `NodePostprocessor`)
+- Source authority ranking (custom `NodePostprocessor`)
+- Confidence scoring (post-generation logic)
+- Audit logging to PostgreSQL
+- S3 snapshot storage
+- Slack bot interaction layer
+- Rate limiting
+- Identity mapping
+
+For sources without a LlamaHub reader (PowerDMS), a custom reader shall be built on LlamaIndex's `BaseReader` interface.
+
 ### 9.1 Ingestion
-For each source, the pipeline shall:
-1. fetch content
-2. normalize content to text/markdown
-3. extract metadata
-4. chunk content by semantic/document structure first, then apply size limits
-5. compute embeddings using Amazon Titan Text Embeddings
-6. index chunks into Amazon OpenSearch Service
-7. store metadata in PostgreSQL
-8. store normalized snapshots in S3
+For each source, the pipeline shall use LlamaIndex's `IngestionPipeline`:
+1. fetch content using a LlamaIndex Reader (or custom `BaseReader` for PowerDMS)
+2. Reader returns normalized `Document` objects with text and metadata
+3. apply node parser for chunking (semantic/structure-first strategy)
+4. compute embeddings using `BedrockEmbedding` (Amazon Titan Text Embeddings)
+5. index nodes into Amazon OpenSearch Service via `OpensearchVectorStore`
+6. use `IngestionPipeline` deduplication (content hash) to skip unchanged documents
+7. store metadata in PostgreSQL (document and chunk records)
+8. store normalized snapshots in S3 (custom step, outside LlamaIndex pipeline)
 
 ### 9.2 Retrieval
 For each user query, the system shall:
 1. normalize the query
-2. generate query embeddings
-3. run hybrid retrieval:
-   - keyword search
-   - vector search
-   - metadata filtering
-4. enforce authorization filters
-5. rank results by relevance, freshness, and source authority
+2. use LlamaIndex's retriever to generate query embeddings and execute hybrid search against `OpensearchVectorStore`
+3. apply metadata filters for authorization (`visibility_scope`, `acl_tags`) via `MetadataFilters`
+4. apply custom `NodePostprocessor` for source authority ranking boost
+5. apply custom `NodePostprocessor` for freshness boost
+6. apply custom `NodePostprocessor` for authorization filtering
+7. return top-K ranked nodes with metadata
 
 ### 9.3 Augmentation
-The system shall build a prompt containing:
+The system shall use LlamaIndex's `PromptTemplate` to build a prompt containing:
 - the user question
-- top retrieved chunks
-- source metadata
-- answering rules
-- citation instructions
+- top retrieved chunks (nodes) with source metadata
+- grounding rules, citation instructions, and refusal rules
+- prompt injection defenses (sanitize node content before prompt assembly)
 
 ### 9.4 Generation
-The LLM shall:
+The system shall use LlamaIndex's `Bedrock` LLM class for answer generation. The LLM shall:
 - answer only from provided context
 - cite evidence
 - note uncertainty
 - refuse unsupported claims
 
 ### 9.5 Embedding Model
-The system shall use **Amazon Titan Text Embeddings** for:
-- document chunk embeddings
-- query embeddings
+The system shall use **Amazon Titan Text Embeddings** via LlamaIndex's `BedrockEmbedding` for:
+- document chunk embeddings (during ingestion)
+- query embeddings (during retrieval)
 
 ### 9.5.1 Amazon OpenSearch Service Vector Dimensions
 The OpenSearch vector dimension shall match the default output dimension of the selected Amazon Titan Text Embeddings model configuration.
 The Amazon OpenSearch Service index vector dimension must exactly match the embedding output dimension.
 
 ### 9.6 Chunking Strategy
-The system shall chunk content by **semantic/document structure first**, then apply size limits.
+The system shall use LlamaIndex node parsers configured for **semantic/document structure first**, then size limits.
+
+Preferred node parsers by content type:
+- Markdown/Confluence/GitHub: `MarkdownNodeParser` (splits on headings and structure)
+- General text: `SentenceSplitter` with structure-aware settings
+- Optionally: `SemanticSplitterNodeParser` for content without clear structural markers
 
 Chunking rules:
 - split first on natural document boundaries such as title, heading, subsection, FAQ item, procedure block, bullet group, or code/explanation block
 - if a structural section is too large, split further by paragraph groups or sentence-safe boundaries
-- preserve heading path and parent metadata on every chunk
+- preserve heading path and parent metadata on every chunk (via LlamaIndex node metadata inheritance)
 - keep semantically related explanatory text and short code/command examples together when applicable
 
-Default targets:
+Default targets (configured on the node parser):
 - target chunk size: approximately 450–650 tokens
 - hard maximum: approximately 900 tokens
 - overlap: approximately 75 tokens only when splitting long continuous narrative sections
@@ -381,11 +409,11 @@ Governance owners may override this ordering.
 
 ## 11. Source Connectors
 
-A connector is a service responsible for ingesting content from a source system (e.g., Confluence, GitHub) into the RAG index.
+A connector is a service responsible for ingesting content from a source system (e.g., Confluence, GitHub) into the RAG index. Each connector uses a LlamaIndex Reader (from LlamaHub where available, or a custom `BaseReader`) to fetch and normalize content into `Document` objects, which are then processed by the shared `IngestionPipeline`.
 
 
 ### 11.1 Confluence
-All Confluence spaces are in scope.
+All Confluence spaces are in scope. Uses `ConfluenceReader` from LlamaHub.
 
 Must support:
 - page body extraction
@@ -397,7 +425,7 @@ Must support:
 - permission metadata where available
 
 ### 11.2 GitHub
-All repositories under the `Sage-Bionetworks` and `Sage-Bionetworks-IT` GitHub organizations are in scope.
+All repositories under the `Sage-Bionetworks` and `Sage-Bionetworks-IT` GitHub organizations are in scope. Uses `GithubRepositoryReader` from LlamaHub.
 
 Must support:
 - Markdown docs
@@ -408,6 +436,8 @@ Must support:
 - repository-scoped ingestion and status tracking
 
 ### 11.3 Intranet
+Uses `BeautifulSoupWebReader` or `SimpleWebPageReader` from LlamaHub.
+
 Must support:
 - HTML crawl or API fetch
 - boilerplate removal
@@ -416,6 +446,8 @@ Must support:
 - update detection
 
 ### 11.4 PowerDMS
+No LlamaHub reader available. Uses a custom reader built on LlamaIndex's `BaseReader` interface.
+
 Must support:
 - title
 - version
@@ -425,7 +457,7 @@ Must support:
 - update detection
 
 ### 11.5 Slack
-Public Slack channels and threads are in scope. Private channels and DMs are excluded.
+Public Slack channels and threads are in scope. Private channels and DMs are excluded. Uses `SlackReader` from LlamaHub for basic message fetching; custom logic wraps the reader for thread grouping, incremental sync, and filtering.
 
 Must support:
 - message text extraction (including threaded replies)
@@ -438,7 +470,7 @@ Must support:
 - respecting Slack API rate limits
 
 ### 11.6 Jira
-All Jira projects are in scope.
+All Jira projects are in scope. Uses `JiraReader` from LlamaHub for basic issue fetching; custom logic wraps the reader for JQL-based incremental sync and comment aggregation.
 
 Must support:
 - issue summary, description, and comments extraction

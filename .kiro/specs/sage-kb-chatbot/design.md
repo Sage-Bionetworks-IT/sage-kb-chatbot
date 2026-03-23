@@ -4,7 +4,7 @@
 
 The Sage Internal Knowledge Slack Chatbot is an internal assistant that answers employee questions using a Retrieval-Augmented Generation (RAG) architecture. It ingests content from multiple internal knowledge sources — Confluence, Slack (public channels), Jira, GitHub, the intranet, and PowerDMS for MVP — indexes that content into a hybrid search engine, and generates grounded, cited answers delivered through Slack.
 
-The system is built entirely on AWS managed services. A thin Lambda function handles Slack event ingress and immediate acknowledgment, then hands off to an always-on ECS Fargate service for the heavy RAG orchestration work. Ingestion is driven by EventBridge-scheduled Step Functions that dispatch connector-specific workers. All interactions are auditable, permission-aware, and designed for phased source onboarding.
+The system is built entirely on AWS managed services, with **LlamaIndex** as the RAG framework for ingestion, retrieval, and query orchestration. A thin Lambda function handles Slack event ingress and immediate acknowledgment, then hands off to an always-on ECS Fargate service for the heavy RAG orchestration work. Ingestion is driven by EventBridge schedules that directly trigger connector-specific ECS Fargate workers using LlamaIndex Readers (from LlamaHub where available) and `IngestionPipeline`. All interactions are auditable, permission-aware, and designed for phased source onboarding.
 
 The design prioritizes retrieval quality over generative creativity: every answer must be grounded in retrieved content, cite its sources, and clearly communicate confidence. When evidence is insufficient, the bot refuses to answer rather than hallucinate.
 
@@ -62,8 +62,6 @@ graph TD
 
     subgraph Ingestion["Ingestion Plane"]
         EventBridge["EventBridge<br/>(Schedules)"]
-        StepFn["Step Functions<br/>(Orchestration)"]
-        ConnectorLambda["Lambda<br/>(Connector Dispatch)"]
         ConnectorECS["ECS Fargate<br/>(Connector Workers)<br/>on-demand"]
     end
 
@@ -84,9 +82,7 @@ graph TD
     ECS --> Bedrock
     ECS -->|post answer| SlackApp
 
-    EventBridge --> StepFn
-    StepFn --> ConnectorLambda
-    ConnectorLambda --> ConnectorECS
+    EventBridge -->|ECS RunTask| ConnectorECS
     ConnectorECS --> OpenSearch
     ConnectorECS --> RDS
     ConnectorECS --> S3
@@ -138,21 +134,20 @@ graph TD
 
 ### Component 3: RAG Orchestrator (ECS Fargate)
 
-**Purpose**: The core chatbot backend. Consumes query messages, performs identity mapping, authorization, retrieval, prompt assembly, LLM invocation, and delivers the answer back to Slack.
+**Purpose**: The core chatbot backend. Consumes query messages, performs identity mapping, authorization, retrieval, prompt assembly, LLM invocation, and delivers the answer back to Slack. Uses LlamaIndex for retrieval, prompt assembly, and generation.
 
 **Responsibilities**:
 - Poll SQS for incoming query messages
 - Map Slack user ID to internal identity and authorization groups
 - Enforce per-user and per-channel rate limits
-- Generate query embeddings via Amazon Bedrock (Titan Text Embeddings)
-- Execute hybrid search against OpenSearch (keyword + vector + metadata filters)
-- Apply authorization filters to search results
-- Rank results by relevance, freshness, and source authority
-- Assemble the LLM prompt with retrieved chunks, metadata, and answering rules
-- Invoke Amazon Bedrock for answer generation
+- Use LlamaIndex's retriever (backed by `OpensearchVectorStore`) to generate query embeddings and execute hybrid search with `MetadataFilters` for authorization
+- Apply custom `NodePostprocessor` for source authority ranking and freshness boost
+- Apply custom `NodePostprocessor` for authorization filtering
+- Assemble the LLM prompt using LlamaIndex's `PromptTemplate` with grounding rules, citation instructions, and answering rules
+- Invoke Amazon Bedrock for answer generation via LlamaIndex's `Bedrock` LLM class
 - Parse LLM response, extract citations, assign confidence level
 - Post formatted answer to Slack (answer, confidence, sources, notes)
-- Log query, retrieved sources, answer, confidence, and latency to PostgreSQL
+- Log query, retrieved sources, answer, confidence, and latency to PostgreSQL (custom code)
 - Handle feedback interactions (helpful/not helpful/report issue)
 
 **Scaling**:
@@ -185,37 +180,36 @@ Triggers ingestion runs on source-specific schedules:
 - Intranet: every 12 hours
 - PowerDMS: every 12 hours
 
-#### 4b. Orchestrator (Step Functions)
+#### 4b. Connector Workers (ECS Fargate, on-demand)
 
-Coordinates each ingestion run:
-- Determines run type (full sync vs. incremental)
-- Dispatches connector-specific workers
-- Tracks progress and handles failures
-- Updates `connector_status` and creates `ingestion_runs` records
+Each source has an isolated connector worker that uses a LlamaIndex Reader (from LlamaHub where available) and the shared `IngestionPipeline`:
+- Fetches content using a LlamaIndex Reader (`ConfluenceReader`, `SlackReader`, `JiraReader`, `GithubRepositoryReader`, `BeautifulSoupWebReader`) or a custom `BaseReader` (PowerDMS)
+- Reader returns normalized `Document` objects with text and metadata
+- Feeds documents into LlamaIndex's `IngestionPipeline` configured with:
+  - Node parser for chunking (semantic/structure-first strategy)
+  - `BedrockEmbedding` for embedding generation
+  - `OpensearchVectorStore` for indexing
+  - Content-hash deduplication to skip unchanged documents
+- Stores normalized snapshots in S3 (custom step, outside LlamaIndex pipeline)
+- Updates document and chunk metadata in PostgreSQL (custom step)
 
-#### 4c. Connector Workers (ECS Fargate, on-demand)
-
-Each source has an isolated connector worker:
-- Fetches content from the source API
-- Normalizes content to text/markdown
-- Extracts metadata (title, URL, owner, timestamps, permissions)
-- Chunks content using semantic/structure-first strategy
-- Computes embeddings via Amazon Bedrock (Titan Text Embeddings)
-- Indexes chunks into OpenSearch
-- Stores normalized snapshots in S3
-- Updates document and chunk metadata in PostgreSQL
+Each connector worker is responsible for managing its own `ingestion_runs` and `connector_status` records:
+- Creates `ingestion_runs` record (status: running) at start
+- Updates `ingestion_runs` status (succeeded/failed) on completion
+- Updates `connector_status` (last_success_at, lag, counts) on completion
+- Handles its own error tracking (increment `consecutive_failures` on failure)
 
 **Interactions**:
-- Triggered by: EventBridge → Step Functions
+- Triggered by: EventBridge (direct ECS RunTask)
 - Reads from: Source system APIs, Secrets Manager
-- Writes to: OpenSearch, RDS PostgreSQL, S3
-- Invokes: Amazon Bedrock (embeddings)
+- Writes to: OpenSearch (via `OpensearchVectorStore`), RDS PostgreSQL, S3
+- Invokes: Amazon Bedrock (via `BedrockEmbedding`)
 
 ---
 
 ### Component 5: OpenSearch Service (Hybrid Search Index)
 
-**Purpose**: Stores document chunks with both text content and vector embeddings, supporting hybrid keyword + semantic search with metadata filtering.
+**Purpose**: Stores document chunks with both text content and vector embeddings, supporting hybrid keyword + semantic search with metadata filtering. Managed via LlamaIndex's `OpensearchVectorStore` abstraction.
 
 **Responsibilities**:
 - Store indexed chunks with all required fields (document_id, chunk_id, source_system, content, embedding, acl_tags, visibility_scope, etc.)
@@ -223,6 +217,7 @@ Each source has an isolated connector worker:
 - Support k-NN vector search using embeddings
 - Support metadata-based filtering (source_system, visibility_scope, acl_tags)
 - Return ranked results combining lexical and semantic scores
+- Accessed by ingestion workers (write) and RAG orchestrator (read) through `OpensearchVectorStore`
 
 **Index Schema Fields**:
 - `document_id`, `chunk_id`, `source_system`, `source_url`, `title`
@@ -249,11 +244,11 @@ Each source has an isolated connector worker:
 
 ### Component 7: Amazon Bedrock
 
-**Purpose**: Provides both embedding generation and LLM-based answer generation.
+**Purpose**: Provides both embedding generation and LLM-based answer generation. Accessed via LlamaIndex's `BedrockEmbedding` and `Bedrock` LLM classes.
 
 **Two usage modes**:
-- **Embeddings**: Amazon Titan Text Embeddings for document chunk and query embedding
-- **Generation**: LLM invocation for answer generation with grounding rules, citation instructions, and confidence assessment
+- **Embeddings**: Amazon Titan Text Embeddings via `BedrockEmbedding` for document chunk and query embedding
+- **Generation**: LLM invocation via `Bedrock` LLM class for answer generation with grounding rules, citation instructions, and confidence assessment
 
 ---
 
@@ -294,13 +289,13 @@ sequenceDiagram
     SQS->>ECS: Deliver message
     ECS->>RDS: Lookup user identity & auth groups
     ECS->>ECS: Check rate limits
-    ECS->>Bedrock: Generate query embedding
+    ECS->>Bedrock: Generate query embedding (via BedrockEmbedding)
     Bedrock-->>ECS: Query vector
-    ECS->>OS: Hybrid search (keyword + vector + auth filters)
-    OS-->>ECS: Ranked chunks
-    ECS->>ECS: Apply source authority ranking
-    ECS->>ECS: Assemble prompt (question + chunks + rules)
-    ECS->>Bedrock: Generate answer
+    ECS->>OS: Hybrid search via LlamaIndex retriever (keyword + vector + MetadataFilters)
+    OS-->>ECS: Ranked nodes
+    ECS->>ECS: Apply NodePostprocessor (authority ranking, freshness, auth filtering)
+    ECS->>ECS: Assemble prompt via PromptTemplate (question + nodes + rules)
+    ECS->>Bedrock: Generate answer via Bedrock LLM class
     Bedrock-->>ECS: LLM response
     ECS->>ECS: Parse answer, extract citations, assign confidence
     ECS->>Slack: Post formatted answer to channel/DM
@@ -312,7 +307,6 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant EB as EventBridge
-    participant SF as Step Functions
     participant CW as Connector Worker (ECS)
     participant Source as Source System API
     participant Bedrock as Amazon Bedrock
@@ -320,24 +314,20 @@ sequenceDiagram
     participant S3 as S3
     participant RDS as RDS PostgreSQL
 
-    EB->>SF: Trigger scheduled ingestion
-    SF->>RDS: Create ingestion_run record (status: running)
-    SF->>CW: Launch connector worker
+    EB->>CW: Trigger connector worker (ECS RunTask)
+    CW->>RDS: Create ingestion_run record (status: running)
 
-    CW->>Source: Fetch new/updated content
-    Source-->>CW: Documents
-    CW->>CW: Normalize to text/markdown
-    CW->>CW: Extract metadata
+    CW->>Source: Fetch content via LlamaIndex Reader
+    Source-->>CW: Documents (LlamaIndex Document objects)
     CW->>S3: Store normalized snapshot
-    CW->>CW: Chunk by semantic structure
-    CW->>Bedrock: Compute embeddings for chunks
+    CW->>CW: Feed documents into IngestionPipeline (node parser → BedrockEmbedding → OpensearchVectorStore)
+    CW->>Bedrock: Compute embeddings (via IngestionPipeline + BedrockEmbedding)
     Bedrock-->>CW: Embedding vectors
-    CW->>OS: Index chunks (content + vectors + metadata)
+    CW->>OS: Index nodes (via IngestionPipeline + OpensearchVectorStore)
     CW->>RDS: Update document & chunk metadata
 
-    CW-->>SF: Report completion/failure
-    SF->>RDS: Update ingestion_run (status: succeeded/failed)
-    SF->>RDS: Update connector_status (last_success_at, lag, counts)
+    CW->>RDS: Update ingestion_run (status: succeeded/failed)
+    CW->>RDS: Update connector_status (last_success_at, lag, counts)
 ```
 
 ### Feedback Flow
@@ -514,7 +504,7 @@ erDiagram
 ### Error Scenario 1: Source Connector Failure
 
 **Condition**: A connector worker fails to fetch content from a source system (API timeout, auth failure, rate limit).
-**Response**: The Step Functions workflow marks the ingestion run as `failed`, increments `consecutive_failures` on `connector_status`, and logs the error details. The system continues serving answers from the last successfully indexed content for that source.
+**Response**: The connector worker marks its own ingestion run as `failed`, increments `consecutive_failures` on `connector_status`, and logs the error details. The system continues serving answers from the last successfully indexed content for that source.
 **Recovery**: EventBridge triggers the next scheduled run. If `consecutive_failures` exceeds a threshold, a CloudWatch alarm fires for operator attention. Connectors can be individually disabled without redeploying.
 
 ### Error Scenario 2: SQS Message Processing Failure
@@ -547,15 +537,15 @@ erDiagram
 
 - Test each component in isolation with mocked dependencies
 - Lambda ingress: validate signature verification, event parsing, SQS message formatting
-- RAG orchestrator: test identity mapping, rate limit logic, prompt assembly, response formatting
-- Connector workers: test content normalization, chunking logic, metadata extraction
+- RAG orchestrator: test identity mapping, rate limit logic, `NodePostprocessor` logic, `PromptTemplate` output, response formatting
+- Connector workers: test Reader output parsing, metadata extraction, `IngestionPipeline` configuration
 - Target coverage: >80% for business logic modules
 
 ### Integration Testing Approach
 
 - Test the Lambda → SQS → ECS Fargate message flow end-to-end with localstack or staging
-- Test each connector against sandbox/test instances of source systems
-- Test OpenSearch hybrid search with known document sets and expected retrieval results
+- Test each connector's LlamaIndex Reader against sandbox/test instances of source systems
+- Test OpenSearch hybrid search with known document sets and expected retrieval results via `OpensearchVectorStore`
 - Test the full RAG pipeline with canned queries and pre-indexed content
 - Validate rate limiting behavior under concurrent load
 
@@ -579,7 +569,7 @@ erDiagram
 
 - **Encryption**: All data encrypted at rest (S3 SSE-KMS, RDS encryption, OpenSearch encryption) and in transit (TLS everywhere).
 - **Secrets**: All credentials (Slack tokens, source system API keys, database passwords) stored exclusively in AWS Secrets Manager, rotated on schedule.
-- **IAM**: Least-privilege IAM roles per component. Lambda, ECS tasks, and Step Functions each get scoped roles with only the permissions they need.
+- **IAM**: Least-privilege IAM roles per component. Lambda, ECS tasks, and EventBridge each get scoped roles with only the permissions they need.
 - **Identity mapping**: Slack user IDs mapped to internal identity and authorization groups. Authorization filters applied at query time to OpenSearch results.
 - **Prompt injection defense**: Retrieved content treated as data, not instructions. System prompt is hardcoded and not overridable by source content. Hidden markup and suspicious patterns sanitized before prompt assembly.
 - **Audit trail**: All queries, retrieved sources, answers, and feedback logged to PostgreSQL. CloudTrail enabled for AWS API activity. Audit logs retained for 90 days per governance policy.
@@ -596,7 +586,6 @@ erDiagram
 - Amazon RDS for PostgreSQL — Metadata, audit, and state store
 - Amazon S3 — Document snapshots
 - Amazon Bedrock — LLM generation + Titan Text Embeddings
-- AWS Step Functions — Ingestion workflow orchestration
 - Amazon EventBridge — Ingestion scheduling
 - AWS Secrets Manager — Credential storage
 - AWS KMS — Encryption key management
@@ -612,7 +601,19 @@ erDiagram
 - PowerDMS API — Policy/SOP document ingestion
 - Synapse API — Phase 2, documentation and metadata ingestion
 
+### Python Libraries (Core)
+- `llama-index` — RAG framework (ingestion pipeline, retrieval, prompt assembly, generation)
+- `llama-index-vector-stores-opensearch` — `OpensearchVectorStore` integration
+- `llama-index-embeddings-bedrock` — `BedrockEmbedding` integration
+- `llama-index-llms-bedrock` — `Bedrock` LLM class integration
+- `llama-index-readers-confluence` — `ConfluenceReader` (LlamaHub)
+- `llama-index-readers-slack` — `SlackReader` (LlamaHub)
+- `llama-index-readers-jira` — `JiraReader` (LlamaHub)
+- `llama-index-readers-github` — `GithubRepositoryReader` (LlamaHub)
+- `llama-index-readers-web` — `BeautifulSoupWebReader` / `SimpleWebPageReader` (LlamaHub)
+
 ### AWS Services (Optional / Later Phases)
+- AWS Step Functions — Complex multi-step orchestration if needed in future
 - Amazon ElastiCache for Redis — Query/embedding caching
 - AWS WAF — API Gateway protection
 - AWS X-Ray — Distributed tracing
