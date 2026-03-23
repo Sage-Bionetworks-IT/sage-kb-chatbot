@@ -235,6 +235,7 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 
 **Configuration**:
 - The mapping from Slack User Groups to chatbot authorization groups is defined in a version-controlled YAML file (`config/group_source_mapping.yaml`) and synced to the `group_source_mapping` PostgreSQL table during deployment via a CDK custom resource Lambda (see Component 6)
+- `slack_group_handle` values are stored as bare handles without the `@` prefix (e.g., `sage-hr-access`, not `@sage-hr-access`), matching the format returned by the Slack `usergroups.list` API. The seeder and sync job must strip any leading `@` before lookup/upsert.
 - The YAML file is the single source of truth — rows not present in the file are disabled on deploy
 - Changes go through the normal PR review process for governance visibility
 - Admins manage user-level access by adding/removing users from Slack User Groups in Slack — no separate admin UI required for MVP
@@ -279,7 +280,7 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 - Append ingestion run history (`ingestion_runs`)
 - Log all queries with retrieved sources, answers, confidence, and latency
 - Store user feedback
-- Store `group_source_mapping` configuration: maps Slack User Group handles to chatbot authorization groups and permitted source scopes (e.g., Slack group `@sage-hr-access` → authorization group `hr-content` → source scopes `[powerdms-hr, confluence-hr-space]`). Defined in a version-controlled YAML file (`config/group_source_mapping.yaml`) and synced to the table during deployment via a CDK custom resource Lambda. The YAML file is the single source of truth.
+- Store `group_source_mapping` configuration: maps Slack User Group handles to chatbot authorization groups and permitted source scopes (e.g., Slack group `sage-hr-access` → authorization group `hr-content` → source scopes `[powerdms:hr, confluence:hr-space]`). Defined in a version-controlled YAML file (`config/group_source_mapping.yaml`) and synced to the table during deployment via a CDK custom resource Lambda. The YAML file is the single source of truth.
 
 ---
 
@@ -302,6 +303,34 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 - Organized by source system and document ID
 - Encrypted at rest with SSE-KMS
 - Support lifecycle policies for retention management
+
+
+## Canonical Identifier Formats
+
+This section defines the canonical formats for all identifiers used across the system. All components — ingestion workers, the identity sync job, the CDK seeder Lambda, and the RAG orchestrator — must use these formats consistently.
+
+### Slack Group Handles
+
+- **Format**: Bare handle without `@` prefix
+- **Examples**: `sage-hr-access`, `sage-all`, `sage-it`
+- **Not**: `@sage-hr-access`, `@sage-all`
+- **Normalization**: When ingesting values from the Slack API (`usergroups.list`), strip any leading `@` before lookup or upsert. The Slack API returns bare handles natively, but defensive stripping prevents bugs if upstream behavior changes.
+- **Storage**: The `group_source_mapping.slack_group_handle` column and the YAML config file (`config/group_source_mapping.yaml`) both use bare handles.
+
+### Source Scope Identifiers
+
+- **Format**: `system:scope` — colon-separated, lowercase
+- **Examples**: `powerdms:hr`, `confluence:hr-space`, `github:public`, `jira:it-projects`, `slack:it-channels`, `intranet:all`
+- **Not**: `powerdms-hr` (dash-separated), `PowerDMS:HR` (mixed case)
+- **Usage**: Stored in `group_source_mapping.permitted_source_scopes` (JSONB array) and used at query time to resolve which content a user may access.
+- **Convention**: The `system` segment matches the `source_system` values used in the `documents` table and OpenSearch index. The `scope` segment identifies a logical partition within that system (e.g., a Confluence space, a Jira project category, or a broad access tier like `all` or `public`).
+
+### Authorization Group Names
+
+- **Format**: Lowercase kebab-case
+- **Examples**: `hr-content`, `it-staff`, `general`
+- **Not**: `HR_Content`, `hrContent`, `HR-CONTENT`
+- **Usage**: Stored in `group_source_mapping.authorization_group` and in `users.identity_groups` (JSONB array). Used to join users to their permitted source scopes at query time.
 
 
 ## Data Flow

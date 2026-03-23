@@ -507,10 +507,10 @@ The application shall map:
 - permitted source scopes (derived from authorization groups)
 
 #### 12.1.1 Authorization Group Sync via Slack User Groups
-Slack User Groups (e.g., `@sage-all`, `@sage-engineering`, `@sage-hr-access`) shall serve as the source of truth for authorization group membership.
+Slack User Groups (e.g., `sage-all`, `sage-engineering`, `sage-hr-access`) shall serve as the source of truth for authorization group membership.
 
 The system shall:
-- Maintain a mapping from Slack User Groups to chatbot authorization groups (e.g., Slack group `@sage-hr-access` → authorization group `hr-content`)
+- Maintain a mapping from Slack User Groups to chatbot authorization groups (e.g., Slack group `sage-hr-access` → authorization group `hr-content`)
 - Run a scheduled sync job (EventBridge → ECS Fargate task) every 15 minutes that:
   1. Enumerates configured Slack User Groups via `usergroups.list` and `usergroups.users.list` APIs
   2. For each user, resolves their current group memberships
@@ -690,9 +690,9 @@ Recommended fields:
 Configuration table mapping Slack User Groups to chatbot authorization groups and permitted source scopes.
 
 - `id`
-- `slack_group_handle` (unique — e.g., `@sage-hr-access`)
+- `slack_group_handle` (unique — e.g., `sage-hr-access`; stored without `@` prefix — the Slack API returns bare handles, so the system stores and matches on the bare form; any leading `@` must be stripped before lookup/upsert)
 - `authorization_group` (e.g., `hr-content`)
-- `permitted_source_scopes` (JSONB — list of source scope identifiers, e.g., `["powerdms-hr", "confluence-hr-space"]`)
+- `permitted_source_scopes` (JSONB — list of source scope identifiers using `system:scope` format, e.g., `["powerdms:hr", "confluence:hr-space"]`)
 - `enabled`
 - `created_at`
 - `updated_at`

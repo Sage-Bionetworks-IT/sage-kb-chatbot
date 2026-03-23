@@ -174,125 +174,52 @@
 
 ---
 
-## Task 12: RAG Orchestrator — Identity Mapping and Authorization
+## Task 12: Group-to-Source-Scope Mapping Configuration Table and IaC Seeder
 
-- [ ] Implement user lookup by `slack_user_id` in PostgreSQL `users` table using `psycopg2` or `asyncpg`
-- [ ] Create user record on first interaction if not found (with Slack user info)
-- [ ] Read `identity_groups` for the user (populated by the Slack User Groups sync job — see Task 21a)
-- [ ] Resolve permitted source scopes by joining `identity_groups` against `group_source_mapping` config table (see Task 21b)
-- [ ] Build authorization filter (list of permitted `visibility_scope` and `acl_tags` values) from resolved source scopes
-- [ ] Pass authorization context to the retrieval step
+- [ ] Add `group_source_mapping` table to the SQL migration files (Task 3):
+  - `id` (UUID PK)
+  - `slack_group_handle` (string, unique — stored as bare handle without `@` prefix, matching Slack API format)
+  - `authorization_group` (string)
+  - `permitted_source_scopes` (JSONB — list of source scope identifiers)
+  - `enabled` (boolean, default true)
+  - `created_at`, `updated_at`
+- [ ] Create `config/group_source_mapping.yaml` as the single source of truth for group-to-source-scope mappings:
+  ```yaml
+  mappings:
+    - slack_group_handle: "sage-all"  # bare handle — no @ prefix (matches Slack API format)
+      authorization_group: "general"
+      permitted_source_scopes: ["confluence:public", "github:public", "intranet:all"]
+      enabled: true
+    - slack_group_handle: "sage-it"  # bare handle — no @ prefix
+      authorization_group: "it-staff"
+      permitted_source_scopes: ["confluence:all", "github:all", "jira:it-projects", "powerdms:all", "slack:it-channels"]
+      enabled: true
+    - slack_group_handle: "sage-hr-access"  # bare handle — no @ prefix
+      authorization_group: "hr-content"
+      permitted_source_scopes: ["powerdms:hr", "confluence:hr-space"]
+      enabled: true
+  ```
+- [ ] Implement CDK custom resource Lambda (`lambda/seed_group_mapping/handler.py`) that:
+  1. Reads `config/group_source_mapping.yaml` (bundled with the Lambda)
+  2. Connects to PostgreSQL via Secrets Manager credentials
+  3. Upserts rows into `group_source_mapping` for each entry in the YAML (strip any leading `@` from `slack_group_handle` before upsert to ensure canonical bare-handle format)
+  4. Disables rows in the table whose `slack_group_handle` no longer appears in the YAML (soft-delete)
+  5. Runs on every `cdk deploy` (triggered by content hash of the YAML file)
+- [ ] Create `constructs/group_mapping_seeder.py` CDK construct wrapping the custom resource Lambda
+- [ ] Write unit tests `tests/test_group_mapping_seeder.py` for: YAML parsing, upsert logic, soft-disable of removed entries, idempotency
+- [ ] Write fine-grained assertions test for the migration
 
-**References**: requirements.md §12.1, §12.1.1, §12.2, §5.6; design.md §Component 3, §Component 4e
-
----
-
-## Task 13: RAG Orchestrator — Rate Limiting
-
-- [ ] Implement per-user rate limits: 5/min, 30/hr, 100/day, 1 in-flight
-- [ ] Implement per-channel rate limit: 10 per 5 minutes
-- [ ] Implement global concurrent RAG job limit: 25
-- [ ] Use PostgreSQL or in-memory counters (with ECS task count awareness) for tracking
-- [ ] Check rate limits immediately after dequeuing the SQS message; if exceeded, skip all heavy downstream processing (Bedrock, OpenSearch), send user-friendly Slack response, and delete/ack the message from the queue
-- [ ] Return user-friendly Slack message when rate-limited
-- [ ] Write unit tests for each rate limit tier using `pytest`
-
-**References**: requirements.md §18; design.md §Error Scenario 3
-
----
-
-## Task 14: RAG Orchestrator — Query Retrieval via LlamaIndex
-
-- [ ] Configure LlamaIndex retriever backed by `OpensearchVectorStore` with `BedrockEmbedding` for automatic query embedding
-- [ ] Configure hybrid search mode (keyword + vector) on the retriever
-- [ ] Implement retry with exponential backoff (up to 3 attempts) on Bedrock/OpenSearch errors
-- [ ] Write unit tests with mocked retriever using `pytest` and `unittest.mock`
-
-**References**: requirements.md §9.2, §9.5; design.md §Component 3, §Component 7
-
----
-
-## Task 15: RAG Orchestrator — Hybrid Search and Post-Processing
-
-- [ ] Configure `OpensearchVectorStore` retriever with hybrid mode combining BM25 keyword search and k-NN vector search
-- [ ] Apply authorization filters via `MetadataFilters` (`visibility_scope`, `acl_tags`) from the user's identity context
-- [ ] Implement custom `NodePostprocessor` for source authority ranking boost based on `authoritative_rank`
-- [ ] Implement custom `NodePostprocessor` for freshness boost based on `last_updated`
-- [ ] Implement custom `NodePostprocessor` for authorization filtering
-- [ ] Return top-K ranked nodes with metadata
-- [ ] Write unit tests for each `NodePostprocessor` and retriever configuration using `pytest`
-
-**References**: requirements.md §9.2, §10.2, §10.3; design.md §Component 3, §Component 5
+**References**: requirements.md §12.1.1; design.md §Component 4e, §Component 6
 
 ---
 
-## Task 16: RAG Orchestrator — Prompt Assembly
-
-- [ ] Define LlamaIndex `PromptTemplate` with: grounding rules, citation instructions, refusal rules, confidence assessment instructions, and prompt injection defenses
-- [ ] Configure the template to include the user question and top retrieved nodes with source metadata (title, source_system, source_url, last_updated)
-- [ ] Enforce token budget: truncate or drop lowest-ranked nodes if prompt exceeds model context window
-- [ ] Write unit tests for prompt template output and sanitization using `pytest`
-
-**References**: requirements.md §9.3, §15.1, §15.2, §12.5; design.md §Component 3
-
----
-
-## Task 17: RAG Orchestrator — LLM Answer Generation
-
-- [ ] Configure LlamaIndex's `Bedrock` LLM class for the generation model (e.g., Claude 3 Sonnet/Haiku via Bedrock)
-- [ ] Invoke the LLM via LlamaIndex with the assembled `PromptTemplate`
-- [ ] Parse LLM response: extract answer text, cited source references, uncertainty notes
-- [ ] Assign confidence level (High/Medium/Low) based on: relevance scores, source agreement, source authority, answer completeness
-- [ ] Implement retry with exponential backoff on Bedrock errors
-- [ ] Write unit tests with mocked LLM class using `pytest`
-
-**References**: requirements.md §9.4, §15.3; design.md §Component 7, §Error Scenario 5
-
----
-
-## Task 18: RAG Orchestrator — Slack Response Formatting and Posting
-
-- [ ] Format answer as Slack Block Kit message: answer block, confidence block, numbered sources block (title, system, URL), notes block
-- [ ] Add interactive buttons: "Helpful", "Not helpful", "View sources", "Report issue"
-- [ ] Post message to the correct channel/DM and thread using Slack `chat.postMessage` API (via `slack_sdk`)
-- [ ] Handle Slack API errors gracefully (retry once, log failure)
-- [ ] Write unit tests for message formatting using `pytest`
-
-**References**: requirements.md §14.1, §14.2, §14.3; design.md §Component 3
-
----
-
-## Task 19: RAG Orchestrator — Audit Logging
-
-- [ ] After each query, insert a record into `queries` table: user_id, question, answer, confidence, latency_ms
-- [ ] Insert records into `query_sources` for each retrieved chunk used: query_id, document_id, chunk_id, rank
-- [ ] Ensure logging does not block the response path (fire-and-forget or async)
-- [ ] Write unit tests for audit log insertion using `pytest`
-
-**References**: requirements.md §5.5; design.md §Component 6
-
----
-
-## Task 20: RAG Orchestrator — Feedback Handler
-
-- [ ] Handle Slack interactive payload (button clicks) routed through the SQS consumer
-- [ ] Parse feedback type: helpful, not_helpful, report_issue
-- [ ] Parse optional user comment (from modal if "Report issue")
-- [ ] Insert record into `feedback` table: query_id, user_id, feedback_type, comment
-- [ ] Acknowledge feedback to user in Slack (ephemeral message)
-- [ ] Write unit tests for feedback parsing and storage using `pytest`
-
-**References**: requirements.md §5.4, §14.3; design.md §Feedback Flow
-
----
-
-## Task 21a: Identity Sync Worker — ECS Fargate Task and EventBridge Schedule
+## Task 13: Identity Sync Worker — ECS Fargate Task and EventBridge Schedule
 
 - [ ] Create `constructs/identity_sync.py` construct
 - [ ] Create ECS Fargate task definition for the identity sync worker (CPU/memory: 0.25 vCPU, 0.5 GB)
 - [ ] Create container image project structure at `containers/identity_sync/` (Dockerfile, `main.py`, `requirements.txt`)
 - [ ] Implement sync logic:
-  1. Read `group_source_mapping` config from PostgreSQL
+  1. Read `group_source_mapping` config from PostgreSQL (seeded by Task 12)
   2. Call Slack `usergroups.list` to enumerate configured Slack User Groups
   3. Call `usergroups.users.list` for each group to resolve current members
   4. For each user, compute the set of authorization groups from group membership
@@ -308,46 +235,119 @@
 
 ---
 
-## Task 21b: Group-to-Source-Scope Mapping Configuration Table and IaC Seeder
+## Task 14: RAG Orchestrator — Identity Mapping and Authorization
 
-- [ ] Add `group_source_mapping` table to the SQL migration files (Task 3):
-  - `id` (UUID PK)
-  - `slack_group_handle` (string, unique)
-  - `authorization_group` (string)
-  - `permitted_source_scopes` (JSONB — list of source scope identifiers)
-  - `enabled` (boolean, default true)
-  - `created_at`, `updated_at`
-- [ ] Create `config/group_source_mapping.yaml` as the single source of truth for group-to-source-scope mappings:
-  ```yaml
-  mappings:
-    - slack_group_handle: "@sage-all"
-      authorization_group: "general"
-      permitted_source_scopes: ["confluence:public", "github:public", "intranet:all"]
-      enabled: true
-    - slack_group_handle: "@sage-it"
-      authorization_group: "it-staff"
-      permitted_source_scopes: ["confluence:all", "github:all", "jira:it-projects", "powerdms:all", "slack:it-channels"]
-      enabled: true
-    - slack_group_handle: "@sage-hr-access"
-      authorization_group: "hr-content"
-      permitted_source_scopes: ["powerdms:hr", "confluence:hr-space"]
-      enabled: true
-  ```
-- [ ] Implement CDK custom resource Lambda (`lambda/seed_group_mapping/handler.py`) that:
-  1. Reads `config/group_source_mapping.yaml` (bundled with the Lambda)
-  2. Connects to PostgreSQL via Secrets Manager credentials
-  3. Upserts rows into `group_source_mapping` for each entry in the YAML
-  4. Disables rows in the table whose `slack_group_handle` no longer appears in the YAML (soft-delete)
-  5. Runs on every `cdk deploy` (triggered by content hash of the YAML file)
-- [ ] Create `constructs/group_mapping_seeder.py` CDK construct wrapping the custom resource Lambda
-- [ ] Write unit tests `tests/test_group_mapping_seeder.py` for: YAML parsing, upsert logic, soft-disable of removed entries, idempotency
-- [ ] Write fine-grained assertions test for the migration
+- [ ] Implement user lookup by `slack_user_id` in PostgreSQL `users` table using `psycopg2` or `asyncpg`
+- [ ] Create user record on first interaction if not found (with Slack user info)
+- [ ] Read `identity_groups` for the user (populated by the Slack User Groups sync job — see Task 13)
+- [ ] Resolve permitted source scopes by joining `identity_groups` against `group_source_mapping` config table (see Task 12)
+- [ ] Build authorization filter (list of permitted `visibility_scope` and `acl_tags` values) from resolved source scopes
+- [ ] Pass authorization context to the retrieval step
 
-**References**: requirements.md §12.1.1; design.md §Component 4e, §Component 6
+**References**: requirements.md §12.1, §12.1.1, §12.2, §5.6; design.md §Component 3, §Component 4e
 
 ---
 
-## Task 21: Ingestion Pipeline — EventBridge Schedules
+## Task 15: RAG Orchestrator — Rate Limiting
+
+- [ ] Implement per-user rate limits: 5/min, 30/hr, 100/day, 1 in-flight
+- [ ] Implement per-channel rate limit: 10 per 5 minutes
+- [ ] Implement global concurrent RAG job limit: 25
+- [ ] Use PostgreSQL or in-memory counters (with ECS task count awareness) for tracking
+- [ ] Check rate limits immediately after dequeuing the SQS message; if exceeded, skip all heavy downstream processing (Bedrock, OpenSearch), send user-friendly Slack response, and delete/ack the message from the queue
+- [ ] Return user-friendly Slack message when rate-limited
+- [ ] Write unit tests for each rate limit tier using `pytest`
+
+**References**: requirements.md §18; design.md §Error Scenario 3
+
+---
+
+## Task 16: RAG Orchestrator — Query Retrieval via LlamaIndex
+
+- [ ] Configure LlamaIndex retriever backed by `OpensearchVectorStore` with `BedrockEmbedding` for automatic query embedding
+- [ ] Configure hybrid search mode (keyword + vector) on the retriever
+- [ ] Implement retry with exponential backoff (up to 3 attempts) on Bedrock/OpenSearch errors
+- [ ] Write unit tests with mocked retriever using `pytest` and `unittest.mock`
+
+**References**: requirements.md §9.2, §9.5; design.md §Component 3, §Component 7
+
+---
+
+## Task 17: RAG Orchestrator — Hybrid Search and Post-Processing
+
+- [ ] Configure `OpensearchVectorStore` retriever with hybrid mode combining BM25 keyword search and k-NN vector search
+- [ ] Apply authorization filters via `MetadataFilters` (`visibility_scope`, `acl_tags`) from the user's identity context
+- [ ] Implement custom `NodePostprocessor` for source authority ranking boost based on `authoritative_rank`
+- [ ] Implement custom `NodePostprocessor` for freshness boost based on `last_updated`
+- [ ] Implement custom `NodePostprocessor` for authorization filtering
+- [ ] Return top-K ranked nodes with metadata
+- [ ] Write unit tests for each `NodePostprocessor` and retriever configuration using `pytest`
+
+**References**: requirements.md §9.2, §10.2, §10.3; design.md §Component 3, §Component 5
+
+---
+
+## Task 18: RAG Orchestrator — Prompt Assembly
+
+- [ ] Define LlamaIndex `PromptTemplate` with: grounding rules, citation instructions, refusal rules, confidence assessment instructions, and prompt injection defenses
+- [ ] Configure the template to include the user question and top retrieved nodes with source metadata (title, source_system, source_url, last_updated)
+- [ ] Enforce token budget: truncate or drop lowest-ranked nodes if prompt exceeds model context window
+- [ ] Write unit tests for prompt template output and sanitization using `pytest`
+
+**References**: requirements.md §9.3, §15.1, §15.2, §12.5; design.md §Component 3
+
+---
+
+## Task 19: RAG Orchestrator — LLM Answer Generation
+
+- [ ] Configure LlamaIndex's `Bedrock` LLM class for the generation model (e.g., Claude 3 Sonnet/Haiku via Bedrock)
+- [ ] Invoke the LLM via LlamaIndex with the assembled `PromptTemplate`
+- [ ] Parse LLM response: extract answer text, cited source references, uncertainty notes
+- [ ] Assign confidence level (High/Medium/Low) based on: relevance scores, source agreement, source authority, answer completeness
+- [ ] Implement retry with exponential backoff on Bedrock errors
+- [ ] Write unit tests with mocked LLM class using `pytest`
+
+**References**: requirements.md §9.4, §15.3; design.md §Component 7, §Error Scenario 5
+
+---
+
+## Task 20: RAG Orchestrator — Slack Response Formatting and Posting
+
+- [ ] Format answer as Slack Block Kit message: answer block, confidence block, numbered sources block (title, system, URL), notes block
+- [ ] Add interactive buttons: "Helpful", "Not helpful", "View sources", "Report issue"
+- [ ] Post message to the correct channel/DM and thread using Slack `chat.postMessage` API (via `slack_sdk`)
+- [ ] Handle Slack API errors gracefully (retry once, log failure)
+- [ ] Write unit tests for message formatting using `pytest`
+
+**References**: requirements.md §14.1, §14.2, §14.3; design.md §Component 3
+
+---
+
+## Task 21: RAG Orchestrator — Audit Logging
+
+- [ ] After each query, insert a record into `queries` table: user_id, question, answer, confidence, latency_ms
+- [ ] Insert records into `query_sources` for each retrieved chunk used: query_id, document_id, chunk_id, rank
+- [ ] Ensure logging does not block the response path (fire-and-forget or async)
+- [ ] Write unit tests for audit log insertion using `pytest`
+
+**References**: requirements.md §5.5; design.md §Component 6
+
+---
+
+## Task 22: RAG Orchestrator — Feedback Handler
+
+- [ ] Handle Slack interactive payload (button clicks) routed through the SQS consumer
+- [ ] Parse feedback type: helpful, not_helpful, report_issue
+- [ ] Parse optional user comment (from modal if "Report issue")
+- [ ] Insert record into `feedback` table: query_id, user_id, feedback_type, comment
+- [ ] Acknowledge feedback to user in Slack (ephemeral message)
+- [ ] Write unit tests for feedback parsing and storage using `pytest`
+
+**References**: requirements.md §5.4, §14.3; design.md §Feedback Flow
+
+---
+
+## Task 23: Ingestion Pipeline — EventBridge Schedules
 
 - [ ] Create `constructs/ingestion_scheduler.py` construct
 - [ ] Create EventBridge rules for each source with freshness-aligned schedules:
@@ -364,7 +364,7 @@
 
 ---
 
-## Task 22: Ingestion Pipeline — Connector Self-Management
+## Task 24: Ingestion Pipeline — Connector Self-Management
 
 - [ ] Implement self-management logic in the base connector framework (`containers/connectors/base_connector/`)
 - [ ] At startup: create `ingestion_runs` record (status: running), determine run type (full vs. incremental based on `last_cursor`)
@@ -378,7 +378,7 @@
 
 ---
 
-## Task 23: Connector — Base Connector Framework (LlamaIndex IngestionPipeline)
+## Task 25: Connector — Base Connector Framework (LlamaIndex IngestionPipeline)
 
 - [ ] Create shared connector base in `containers/connectors/base_connector/`
 - [ ] Configure LlamaIndex `IngestionPipeline` with:
@@ -396,7 +396,7 @@
 
 ---
 
-## Task 24: Connector — Confluence
+## Task 26: Connector — Confluence
 
 - [ ] Create `containers/connectors/confluence_connector/` with handler
 - [ ] Configure `ConfluenceReader` from LlamaHub with Confluence credentials from Secrets Manager
@@ -412,7 +412,7 @@
 
 ---
 
-## Task 25: Connector — Slack
+## Task 27: Connector — Slack
 
 - [ ] Create `containers/connectors/slack_connector/` with handler
 - [ ] Configure `SlackReader` from LlamaHub with Slack bot token from Secrets Manager
@@ -433,7 +433,7 @@
 
 ---
 
-## Task 26: Connector — Jira
+## Task 28: Connector — Jira
 
 - [ ] Create `containers/connectors/jira_connector/` with handler
 - [ ] Configure `JiraReader` from LlamaHub with Jira credentials from Secrets Manager
@@ -452,7 +452,7 @@
 
 ---
 
-## Task 27: Connector — GitHub
+## Task 29: Connector — GitHub
 
 - [ ] Create `containers/connectors/github_connector/` with handler
 - [ ] Configure `GithubRepositoryReader` from LlamaHub with GitHub App credentials from Secrets Manager
@@ -468,7 +468,7 @@
 
 ---
 
-## Task 28: Connector — Intranet
+## Task 30: Connector — Intranet
 
 - [ ] Create `containers/connectors/intranet_connector/` with handler
 - [ ] Configure `BeautifulSoupWebReader` or `SimpleWebPageReader` from LlamaHub for HTML content fetching
@@ -482,7 +482,7 @@
 **References**: requirements.md §11.3; design.md §Component 4c
 ---
 
-## Task 29: Connector — PowerDMS
+## Task 31: Connector — PowerDMS
 
 - [ ] Create `containers/connectors/powerdms_connector/` with handler
 - [ ] Implement custom `BaseReader` (LlamaIndex interface) for PowerDMS since no LlamaHub reader exists
@@ -498,7 +498,7 @@
 
 ---
 
-## Task 30: Observability — CloudWatch Metrics, Logs, and Alarms
+## Task 32: Observability — CloudWatch Metrics, Logs, and Alarms
 
 - [ ] Create `constructs/observability.py` construct
 - [ ] Configure CloudWatch log groups for: Lambda, ECS tasks (RAG orchestrator + connectors)
@@ -521,7 +521,7 @@
 
 ---
 
-## Task 31: IAM Roles and Least-Privilege Policies
+## Task 33: IAM Roles and Least-Privilege Policies
 
 - [ ] Review and tighten all IAM roles created in previous tasks
 - [ ] Lambda ingress role: only `sqs:SendMessage`, `secretsmanager:GetSecretValue` (scoped to Slack secret)
@@ -538,7 +538,7 @@
 
 ---
 
-## Task 32: End-to-End Integration Test
+## Task 34: End-to-End Integration Test
 
 - [ ] Create integration test that exercises the full query flow: Slack event → API Gateway → Lambda → SQS → ECS RAG orchestrator → OpenSearch + Bedrock → Slack response
 - [ ] Pre-index a small set of known test documents into OpenSearch
@@ -551,7 +551,7 @@
 
 ---
 
-## Task 33: CDK Stack Composition and Deployment Configuration
+## Task 35: CDK Stack Composition and Deployment Configuration
 
 - [ ] Create `stacks/sage_kb_chatbot_stack.py` that composes all constructs
 - [ ] Wire cross-construct references (VPC, security groups, secrets ARNs, queue URLs, DB endpoints, OpenSearch domain)
