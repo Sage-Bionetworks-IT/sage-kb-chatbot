@@ -293,7 +293,7 @@
 
 ---
 
-## Task 21b: Group-to-Source-Scope Mapping Configuration Table
+## Task 21b: Group-to-Source-Scope Mapping Configuration Table and IaC Seeder
 
 - [ ] Add `group_source_mapping` table to the SQL migration files (Task 3):
   - `id` (UUID PK)
@@ -302,7 +302,26 @@
   - `permitted_source_scopes` (JSONB — list of source scope identifiers)
   - `enabled` (boolean, default true)
   - `created_at`, `updated_at`
-- [ ] Seed initial mapping rows for MVP groups (e.g., `@sage-all` → `general` → all public sources)
+- [ ] Create `config/group_source_mapping.yaml` as the single source of truth for group-to-source-scope mappings:
+  ```yaml
+  mappings:
+    - slack_group_handle: "@sage-all"
+      authorization_group: "general"
+      permitted_source_scopes: ["confluence:public", "github:public", "intranet:all"]
+      enabled: true
+    - slack_group_handle: "@sage-it"
+      authorization_group: "it-staff"
+      permitted_source_scopes: ["confluence:all", "github:all", "jira:it-projects", "powerdms:all", "slack:it-channels"]
+      enabled: true
+  ```
+- [ ] Implement CDK custom resource Lambda (`lambda/seed_group_mapping/handler.py`) that:
+  1. Reads `config/group_source_mapping.yaml` (bundled with the Lambda)
+  2. Connects to PostgreSQL via Secrets Manager credentials
+  3. Upserts rows into `group_source_mapping` for each entry in the YAML
+  4. Disables rows in the table whose `slack_group_handle` no longer appears in the YAML (soft-delete)
+  5. Runs on every `cdk deploy` (triggered by content hash of the YAML file)
+- [ ] Create `constructs/group_mapping_seeder.py` CDK construct wrapping the custom resource Lambda
+- [ ] Write unit tests `tests/test_group_mapping_seeder.py` for: YAML parsing, upsert logic, soft-disable of removed entries, idempotency
 - [ ] Write fine-grained assertions test for the migration
 
 **References**: requirements.md §12.1.1; design.md §Component 4e, §Component 6

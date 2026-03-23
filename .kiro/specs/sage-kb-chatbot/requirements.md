@@ -522,7 +522,7 @@ The system shall:
 
 Admins manage access by adding/removing users from Slack User Groups — no separate admin interface is required for MVP.
 
-The group-to-source-scope mapping shall be stored in a configuration table or environment config, allowing governance owners to adjust which groups grant access to which sources without code changes.
+The group-to-source-scope mapping shall be defined in a version-controlled YAML configuration file (`config/group_source_mapping.yaml`) and loaded into the `group_source_mapping` PostgreSQL table during deployment via a CDK custom resource (Lambda). The YAML file is the single source of truth — rows not present in the file are disabled on deploy. Changes go through the normal PR review process, giving governance owners visibility before any access changes land.
 
 ### 12.2 Access Controls
 The application shall enforce:

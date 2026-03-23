@@ -233,8 +233,10 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 - Log sync results: users updated, groups changed, errors encountered
 
 **Configuration**:
-- The mapping from Slack User Groups to chatbot authorization groups is stored in the `group_source_mapping` configuration table in PostgreSQL (see Component 6)
-- Admins manage access by adding/removing users from Slack User Groups — no separate admin UI required for MVP
+- The mapping from Slack User Groups to chatbot authorization groups is defined in a version-controlled YAML file (`config/group_source_mapping.yaml`) and synced to the `group_source_mapping` PostgreSQL table during deployment via a CDK custom resource Lambda (see Component 6)
+- The YAML file is the single source of truth — rows not present in the file are disabled on deploy
+- Changes go through the normal PR review process for governance visibility
+- Admins manage user-level access by adding/removing users from Slack User Groups in Slack — no separate admin UI required for MVP
 
 **Interactions**:
 - Triggered by: EventBridge (every 15 minutes, ECS RunTask)
@@ -276,7 +278,7 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 - Append ingestion run history (`ingestion_runs`)
 - Log all queries with retrieved sources, answers, confidence, and latency
 - Store user feedback
-- Store `group_source_mapping` configuration: maps Slack User Group handles to chatbot authorization groups and permitted source scopes (e.g., Slack group `@sage-hr-access` → authorization group `hr-content` → source scopes `[powerdms-hr, confluence-hr-space]`). Governance owners can update this mapping without code changes.
+- Store `group_source_mapping` configuration: maps Slack User Group handles to chatbot authorization groups and permitted source scopes (e.g., Slack group `@sage-hr-access` → authorization group `hr-content` → source scopes `[powerdms-hr, confluence-hr-space]`). Defined in a version-controlled YAML file (`config/group_source_mapping.yaml`) and synced to the table during deployment via a CDK custom resource Lambda. The YAML file is the single source of truth.
 
 ---
 
