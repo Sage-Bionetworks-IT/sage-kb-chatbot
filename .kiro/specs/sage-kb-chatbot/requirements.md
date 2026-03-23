@@ -778,7 +778,7 @@ Global:
 - 25 concurrent RAG jobs
 
 The system should:
-- reject or delay requests exceeding limits; blocked requests must not enqueue heavy downstream work
+- check rate limits in the RAG orchestrator immediately after dequeuing; rate-limited messages must not trigger heavy downstream processing (Bedrock, OpenSearch) and must be deleted/acknowledged from the queue after sending the user a friendly limit-exceeded response
 - provide user-friendly Slack responses when limits are exceeded
 - use queue-based backpressure via Amazon SQS
 

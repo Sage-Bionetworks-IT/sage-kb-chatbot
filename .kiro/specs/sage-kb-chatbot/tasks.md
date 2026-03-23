@@ -175,7 +175,7 @@
 - [ ] Implement per-channel rate limit: 10 per 5 minutes
 - [ ] Implement global concurrent RAG job limit: 25
 - [ ] Use PostgreSQL or in-memory counters (with ECS task count awareness) for tracking
-- [ ] Reject requests exceeding limits before enqueuing downstream work
+- [ ] Check rate limits immediately after dequeuing the SQS message; if exceeded, skip all heavy downstream processing (Bedrock, OpenSearch), send user-friendly Slack response, and delete/ack the message from the queue
 - [ ] Return user-friendly Slack message when rate-limited
 - [ ] Write unit tests for each rate limit tier using `pytest`
 
@@ -353,7 +353,7 @@
 - [ ] Implement incremental sync using cursor-based pagination and `oldest` timestamp parameter (track `last_cursor` per channel)
 - [ ] Respect Slack API rate limits (Tier 3: ~50 req/min for conversations.history) with backoff
 - [ ] Normalize message content: resolve user mentions (`<@U123>` → display name), channel references, emoji shortcodes
-- [ ] Set `authoritative_rank` to 5 (below intranet, above "other supporting content")
+- [ ] Set `authoritative_rank` to 6 (below intranet, above "other supporting content")
 - [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
 - [ ] Support channel-scoped ingestion and status tracking (one `connector_status` row per channel)
 - [ ] Create ECS Fargate task definition for this connector
@@ -375,7 +375,7 @@
 - [ ] Concatenate issue description + comments into a single document per issue for chunking
 - [ ] Implement update detection via `updated` timestamp comparison
 - [ ] Extract permission metadata where available (project-level visibility)
-- [ ] Set `authoritative_rank` to 3 (same tier as Confluence, above GitHub)
+- [ ] Set `authoritative_rank` to 3 (below Confluence, above GitHub)
 - [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
 - [ ] Support project-scoped ingestion and status tracking (one `connector_status` row per project)
 - [ ] Create ECS Fargate task definition for this connector

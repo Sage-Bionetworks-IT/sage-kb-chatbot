@@ -526,7 +526,7 @@ erDiagram
 ### Error Scenario 3: Rate Limit Exceeded
 
 **Condition**: A user or channel exceeds the configured rate limits (5/min, 30/hr, 100/day per user; 10/5min per channel; 25 concurrent global).
-**Response**: The system rejects the request before enqueuing heavy downstream work. The user receives a friendly Slack message indicating the limit and when they can retry.
+**Response**: The RAG orchestrator checks rate limits immediately after dequeuing the SQS message. If limits are exceeded, the orchestrator skips all heavy downstream processing (Bedrock, OpenSearch), sends a friendly Slack message indicating the limit and when the user can retry, and deletes/acknowledges the message from the queue.
 **Recovery**: Automatic — limits reset on their time windows.
 
 ### Error Scenario 4: Insufficient Evidence for Answer
