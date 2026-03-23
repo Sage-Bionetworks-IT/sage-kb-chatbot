@@ -86,7 +86,7 @@
 ## Task 7: Secrets Manager Entries
 
 - [ ] Create `constructs/app_secrets.py` construct
-- [ ] Define Secrets Manager secrets for: Slack signing secret, Slack bot token, Confluence credentials, GitHub app credentials, PowerDMS credentials
+- [ ] Define Secrets Manager secrets for: Slack signing secret, Slack bot token, Confluence credentials, Jira credentials (API token or OAuth client credentials), GitHub app credentials, PowerDMS credentials
 - [ ] Use KMS CMK for encryption
 - [ ] Output secret ARNs for IAM policy grants to Lambda and ECS tasks
 - [ ] Write fine-grained assertions test `tests/test_app_secrets.py`

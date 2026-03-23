@@ -13,6 +13,7 @@ Slack → API Gateway → Lambda (ingress) → SQS → ECS Fargate (RAG orchestr
 
 Ingestion: EventBridge → Step Functions → ECS Fargate (connector workers)
                                               ├── Confluence
+                                              ├── Slack
                                               ├── Jira
                                               ├── GitHub
                                               ├── Intranet

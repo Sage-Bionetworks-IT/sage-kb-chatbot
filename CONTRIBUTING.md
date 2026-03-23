@@ -10,61 +10,13 @@ Before diving in, familiarize yourself with the project specs:
 - [Design](.kiro/specs/sage-kb-chatbot/design.md) — architecture, component interfaces, data flows, error handling
 - [Tasks](.kiro/specs/sage-kb-chatbot/tasks.md) — implementation task breakdown
 
-## Tech Stack
-
-- **IaC**: AWS CDK (Python)
-- **Runtime**: Python
-- **Compute**: AWS Lambda (Slack ingress), ECS Fargate (RAG orchestrator + connectors)
-- **Search**: Amazon OpenSearch Service
-- **Database**: Amazon RDS PostgreSQL
-- **LLM/Embeddings**: Amazon Bedrock (Titan Text Embeddings + generation model)
-- **Orchestration**: Step Functions, EventBridge, SQS
-- **Security**: Secrets Manager, KMS, IAM least-privilege, VPC private subnets
-
-## Getting Started
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-
-# Synthesize CloudFormation template (defaults to dev)
-cdk synth
-
-# Target a specific environment
-DEPLOY_ENV=staging cdk synth
-DEPLOY_ENV=prod cdk synth
-```
-
-## Environments
-
-Set `DEPLOY_ENV` to target a specific environment:
-
-| Value     | Stack Name              |
-|-----------|-------------------------|
-| `dev`     | SageKbChatbot-Dev       |
-| `staging` | SageKbChatbot-Staging   |
-| `prod`    | SageKbChatbot-Prod      |
 
 ## Project Structure
 
 ```
-app.py                  # CDK app entry point
-stacks/                 # CDK stacks
-constructs/             # CDK constructs
-stages/                 # CDK stages
-lambda/                 # Lambda function handlers
-containers/             # ECS Fargate container images
-tests/                  # Unit and integration tests
 .kiro/specs/            # Requirements, design, and task specs
 .kiro/steering/         # Steering documents for Kiro IDE
 .kiro/hooks/            # Agent hooks for Kiro IDE
-```
-
-## Running Tests
-
-```bash
-pytest -q
 ```
 
 ## Coding Standards
@@ -74,14 +26,6 @@ pytest -q
 - Keep functions small and focused
 - Use meaningful variable and function names
 - Add docstrings to public functions and classes
-
-### CDK Conventions
-
-- Use `cdk-iam-floyd` for IAM policy generation
-- Do not use CDK context for configuration — use environment variables or stack props
-- Constructs should not import resources (e.g., `Vpc.fromLookup()`); stacks handle imports
-- Constructs should save incoming props as a private field and create resources in protected methods
-- Use `PythonFunction` or `NodejsFunction` for Lambda handlers
 
 ### Commit Messages
 
