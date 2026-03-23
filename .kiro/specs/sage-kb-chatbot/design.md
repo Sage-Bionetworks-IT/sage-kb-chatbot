@@ -261,7 +261,7 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 **Index Schema Fields**:
 - `document_id`, `chunk_id`, `source_system`, `source_url`, `title`
 - `content` (full text, analyzed)
-- `embedding` (dense vector, dimension matching Titan Text Embeddings output)
+- `embedding` (dense vector, 1024 dimensions — matching Titan Text Embeddings V2 output)
 - `last_updated`, `authoritative_rank`, `visibility_scope`, `acl_tags`
 - `content_type`, `owner`
 
@@ -287,7 +287,7 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 **Purpose**: Provides both embedding generation and LLM-based answer generation. Accessed via LlamaIndex's `BedrockEmbedding` and `Bedrock` LLM classes.
 
 **Two usage modes**:
-- **Embeddings**: Amazon Titan Text Embeddings via `BedrockEmbedding` for document chunk and query embedding
+- **Embeddings**: Amazon Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`, 1024 dimensions) via `BedrockEmbedding` for document chunk and query embedding
 - **Generation**: LLM invocation via `Bedrock` LLM class for answer generation with grounding rules, citation instructions, and confidence assessment
 
 ---
@@ -613,7 +613,7 @@ erDiagram
 - **Median response time target: < 8 seconds, p95 < 15 seconds**. The critical path is: SQS delivery (~ms) → identity lookup (~50ms) → embedding generation (~200ms) → OpenSearch hybrid search (~300ms) → prompt assembly (~50ms) → LLM generation (~3-6s) → Slack post (~200ms).
 - **ECS Fargate warm tasks**: Maintain 1–2 always-on tasks to eliminate cold start latency on the query path. Auto-scale based on SQS queue depth for burst handling.
 - **Ingestion workers**: Cold start is acceptable since ingestion is background/scheduled work. Use Fargate Spot for cost optimization where appropriate.
-- **OpenSearch sizing**: Index size depends on total chunk count across all sources. Vector dimensions must match Titan Text Embeddings output. Use dedicated master nodes for cluster stability.
+- **OpenSearch sizing**: Index size depends on total chunk count across all sources. Vector dimensions are 1024 (Titan Text Embeddings V2). Use dedicated master nodes for cluster stability.
 - **Caching (future)**: ElastiCache for Redis can cache frequent query embeddings and repeated question results to reduce Bedrock invocations.
 
 ## Security Considerations
@@ -636,7 +636,7 @@ erDiagram
 - Amazon OpenSearch Service — Hybrid search index
 - Amazon RDS for PostgreSQL — Metadata, audit, and state store
 - Amazon S3 — Document snapshots
-- Amazon Bedrock — LLM generation + Titan Text Embeddings
+- Amazon Bedrock — LLM generation + Titan Text Embeddings V2
 - Amazon EventBridge — Ingestion scheduling
 - AWS Secrets Manager — Credential storage
 - AWS KMS — Encryption key management

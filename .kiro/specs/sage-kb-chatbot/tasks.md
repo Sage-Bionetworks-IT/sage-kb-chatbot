@@ -64,7 +64,7 @@
 - [ ] Configure: encryption at rest, node-to-node encryption, private subnet placement, fine-grained access control
 - [ ] Size cluster for MVP (data nodes, instance type, EBS volume)
 - [ ] Create index template/mapping with all required fields: `document_id`, `chunk_id`, `source_system`, `source_url`, `title`, `content`, `last_updated`, `authoritative_rank`, `visibility_scope`, `acl_tags`, `content_type`, `owner`, `embedding` (k-NN vector field)
-- [ ] Set vector dimension to match Amazon Titan Text Embeddings output (1024 for v2, or 1536 for v1 — confirm model choice)
+- [ ] Set vector dimension to 1024 (Amazon Titan Text Embeddings V2: `amazon.titan-embed-text-v2:0`)
 - [ ] Configure k-NN settings (engine: nmslib or faiss, space_type: cosinesimil)
 - [ ] Write fine-grained assertions test `tests/test_search_index.py`
 
@@ -364,7 +364,7 @@
 - [ ] Create shared connector base in `containers/connectors/base_connector/`
 - [ ] Configure LlamaIndex `IngestionPipeline` with:
   - Node parser for chunking (semantic/structure-first per requirements §9.6): `MarkdownNodeParser` for Markdown/Confluence/GitHub, `SentenceSplitter` for general text, optionally `SemanticSplitterNodeParser` for unstructured content
-  - `BedrockEmbedding` (Amazon Titan Text Embeddings) for embedding generation
+  - `BedrockEmbedding` (Amazon Titan Text Embeddings V2, 1024 dimensions) for embedding generation
   - `OpensearchVectorStore` for indexing
   - Content-hash deduplication to skip unchanged documents
 - [ ] Configure node parser settings: target ~450–650 tokens, hard max ~900 tokens, ~75 token overlap for narrative splits

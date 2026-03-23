@@ -303,7 +303,7 @@ For each source, the pipeline shall use LlamaIndex's `IngestionPipeline`:
 1. fetch content using a LlamaIndex Reader (or custom `BaseReader` for PowerDMS)
 2. Reader returns normalized `Document` objects with text and metadata
 3. apply node parser for chunking (semantic/structure-first strategy)
-4. compute embeddings using `BedrockEmbedding` (Amazon Titan Text Embeddings)
+4. compute embeddings using `BedrockEmbedding` (Amazon Titan Text Embeddings V2)
 5. index nodes into Amazon OpenSearch Service via `OpensearchVectorStore`
 6. use `IngestionPipeline` deduplication (content hash) to skip unchanged documents
 7. store metadata in PostgreSQL (document and chunk records)
@@ -334,13 +334,13 @@ The system shall use LlamaIndex's `Bedrock` LLM class for answer generation. The
 - refuse unsupported claims
 
 ### 9.5 Embedding Model
-The system shall use **Amazon Titan Text Embeddings** via LlamaIndex's `BedrockEmbedding` for:
+The system shall use **Amazon Titan Text Embeddings V2** (`amazon.titan-embed-text-v2:0`, 1024 dimensions, 8K token input) via LlamaIndex's `BedrockEmbedding` for:
 - document chunk embeddings (during ingestion)
 - query embeddings (during retrieval)
 
 ### 9.5.1 Amazon OpenSearch Service Vector Dimensions
-The OpenSearch vector dimension shall match the default output dimension of the selected Amazon Titan Text Embeddings model configuration.
-The Amazon OpenSearch Service index vector dimension must exactly match the embedding output dimension.
+The OpenSearch vector dimension shall be **1024**, matching the output dimension of Amazon Titan Text Embeddings V2.
+The Amazon OpenSearch Service index vector dimension must exactly match the embedding output dimension (1024).
 
 ### 9.6 Chunking Strategy
 The system shall use LlamaIndex node parsers configured for **semantic/document structure first**, then size limits.
