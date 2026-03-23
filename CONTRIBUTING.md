@@ -180,7 +180,7 @@ Agent hooks (`.kiro/hooks/*.kiro.hook`) automate actions on IDE events:
 
 ### High Priority
 
-- Connector implementations (Confluence, GitHub, Intranet, PowerDMS)
+- Connector implementations (Confluence, Jira, GitHub, Intranet, PowerDMS)
 - RAG orchestrator query pipeline
 - OpenSearch index configuration and hybrid search
 - Observability and alerting constructs

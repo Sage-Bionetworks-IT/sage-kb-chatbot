@@ -13,6 +13,7 @@ Slack → API Gateway → Lambda (ingress) → SQS → ECS Fargate (RAG orchestr
 
 Ingestion: EventBridge → Step Functions → ECS Fargate (connector workers)
                                               ├── Confluence
+                                              ├── Jira
                                               ├── GitHub
                                               ├── Intranet
                                               └── PowerDMS
@@ -23,6 +24,8 @@ Ingestion: EventBridge → Step Functions → ECS Fargate (connector workers)
 ## Knowledge Sources (MVP)
 
 - Confluence (all spaces)
+- Slack (public channels and threads)
+- Jira (all projects)
 - GitHub (all repos under `Sage-Bionetworks` and `Sage-Bionetworks-IT`)
 - Intranet
 - PowerDMS

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Sage Internal Knowledge Slack Chatbot is an internal assistant that answers employee questions using a Retrieval-Augmented Generation (RAG) architecture. It ingests content from multiple internal knowledge sources — Confluence, GitHub, the intranet, and PowerDMS for MVP — indexes that content into a hybrid search engine, and generates grounded, cited answers delivered through Slack.
+The Sage Internal Knowledge Slack Chatbot is an internal assistant that answers employee questions using a Retrieval-Augmented Generation (RAG) architecture. It ingests content from multiple internal knowledge sources — Confluence, Slack (public channels), Jira, GitHub, the intranet, and PowerDMS for MVP — indexes that content into a hybrid search engine, and generates grounded, cited answers delivered through Slack.
 
 The system is built entirely on AWS managed services. A thin Lambda function handles Slack event ingress and immediate acknowledgment, then hands off to an always-on ECS Fargate service for the heavy RAG orchestration work. Ingestion is driven by EventBridge-scheduled Step Functions that dispatch connector-specific workers. All interactions are auditable, permission-aware, and designed for phased source onboarding.
 
@@ -17,6 +17,8 @@ graph TD
     User["Sage Employee (Slack)"]
     Bot["Sage KB Chatbot"]
     Confluence["Confluence"]
+    Slack_Source["Slack (Public Channels)"]
+    Jira["Jira"]
     GitHub["GitHub"]
     Intranet["Intranet"]
     PowerDMS["PowerDMS"]
@@ -24,6 +26,8 @@ graph TD
 
     User -->|asks question| Bot
     Bot -->|retrieves content from| Confluence
+    Bot -->|retrieves content from| Slack_Source
+    Bot -->|retrieves content from| Jira
     Bot -->|retrieves content from| GitHub
     Bot -->|retrieves content from| Intranet
     Bot -->|retrieves content from| PowerDMS
@@ -175,6 +179,8 @@ graph TD
 
 Triggers ingestion runs on source-specific schedules:
 - Confluence: every 6 hours
+- Slack (public channels): every 1 hour
+- Jira (all projects): every 1 hour
 - GitHub: every 1 hour
 - Intranet: every 12 hours
 - PowerDMS: every 12 hours
@@ -598,8 +604,9 @@ erDiagram
 - AWS CloudTrail — API audit logging
 
 ### External Systems
-- Slack API — Bot interactions, message posting, event subscriptions
+- Slack API — Bot interactions, message posting, event subscriptions, and public channel content ingestion
 - Confluence API — Content ingestion (all spaces)
+- Jira API — Issue and project content ingestion (all projects)
 - GitHub API — Repository content ingestion (Sage-Bionetworks, Sage-Bionetworks-IT orgs)
 - Intranet — HTML crawl or API fetch
 - PowerDMS API — Policy/SOP document ingestion

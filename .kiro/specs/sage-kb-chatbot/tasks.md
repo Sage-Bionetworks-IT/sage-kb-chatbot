@@ -278,6 +278,8 @@
 - [ ] Create `constructs/ingestion_scheduler.py` construct
 - [ ] Create EventBridge rules for each source with freshness-aligned schedules:
   - Confluence: every 6 hours
+  - Slack (public channels): every 1 hour
+  - Jira (all projects): every 1 hour
   - GitHub: every 1 hour
   - Intranet: every 12 hours
   - PowerDMS: every 12 hours
@@ -339,7 +341,51 @@
 
 ---
 
-## Task 25: Connector — GitHub
+## Task 25: Connector — Slack
+
+- [ ] Create `containers/connectors/slack_connector/` with handler
+- [ ] Implement Slack Conversations API client (authenticated via Slack bot token from Secrets Manager) using `slack_sdk`
+- [ ] Enumerate public channels using `conversations.list` (exclude archived channels)
+- [ ] For each channel: fetch message history and threaded replies using `conversations.history` and `conversations.replies`
+- [ ] Filter out bot messages, ephemeral messages, and system messages (join/leave/topic changes)
+- [ ] Extract per-message: text, author (Slack user ID), channel name, thread parent, permalink, timestamp
+- [ ] Group threaded conversations into single documents (parent message + replies)
+- [ ] Implement incremental sync using cursor-based pagination and `oldest` timestamp parameter (track `last_cursor` per channel)
+- [ ] Respect Slack API rate limits (Tier 3: ~50 req/min for conversations.history) with backoff
+- [ ] Normalize message content: resolve user mentions (`<@U123>` → display name), channel references, emoji shortcodes
+- [ ] Set `authoritative_rank` to 5 (below intranet, above "other supporting content")
+- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
+- [ ] Support channel-scoped ingestion and status tracking (one `connector_status` row per channel)
+- [ ] Create ECS Fargate task definition for this connector
+- [ ] Write unit tests for Slack API parsing, message normalization, thread grouping, incremental sync using `pytest`
+
+**References**: requirements.md §11.5; design.md §Component 4c
+
+---
+
+## Task 26: Connector — Jira
+
+- [ ] Create `containers/connectors/jira_connector/` with handler
+- [ ] Implement Jira REST API client (authenticated via API token or OAuth from Secrets Manager) using `requests` or `httpx`
+- [ ] Enumerate all projects using Jira REST API
+- [ ] For each project: fetch issues with summary, description, comments, status, priority, labels, assignee, reporter
+- [ ] Implement incremental sync using JQL `updated >= "last_cursor"` filter
+- [ ] Extract canonical issue URL (permalink) for each issue
+- [ ] Normalize Jira wiki markup / ADF (Atlassian Document Format) to markdown/text
+- [ ] Concatenate issue description + comments into a single document per issue for chunking
+- [ ] Implement update detection via `updated` timestamp comparison
+- [ ] Extract permission metadata where available (project-level visibility)
+- [ ] Set `authoritative_rank` to 3 (same tier as Confluence, above GitHub)
+- [ ] Use base connector framework for chunking, embedding, indexing, snapshot storage
+- [ ] Support project-scoped ingestion and status tracking (one `connector_status` row per project)
+- [ ] Create ECS Fargate task definition for this connector
+- [ ] Write unit tests for Jira API parsing, wiki markup normalization, incremental sync, comment aggregation using `pytest`
+
+**References**: requirements.md §11.6; design.md §Component 4c
+
+---
+
+## Task 27: Connector — GitHub
 
 - [ ] Create `containers/connectors/github_connector/` with handler
 - [ ] Implement GitHub API client (GitHub App auth via Secrets Manager) using `PyGithub` or `httpx`
@@ -356,7 +402,7 @@
 
 ---
 
-## Task 26: Connector — Intranet
+## Task 28: Connector — Intranet
 
 - [ ] Create `containers/connectors/intranet_connector/` with handler
 - [ ] Implement HTML crawl or API fetch (depending on intranet technology) using `requests`/`httpx` and `beautifulsoup4`
@@ -369,10 +415,9 @@
 - [ ] Write unit tests for HTML parsing, boilerplate removal, normalization using `pytest`
 
 **References**: requirements.md §11.3; design.md §Component 4c
-
 ---
 
-## Task 27: Connector — PowerDMS
+## Task 29: Connector — PowerDMS
 
 - [ ] Create `containers/connectors/powerdms_connector/` with handler
 - [ ] Implement PowerDMS API client (authenticated via Secrets Manager) using `requests` or `httpx`
@@ -388,7 +433,7 @@
 
 ---
 
-## Task 28: Observability — CloudWatch Metrics, Logs, and Alarms
+## Task 30: Observability — CloudWatch Metrics, Logs, and Alarms
 
 - [ ] Create `constructs/observability.py` construct
 - [ ] Configure CloudWatch log groups for: Lambda, ECS tasks (RAG orchestrator + connectors), Step Functions
@@ -410,7 +455,7 @@
 
 ---
 
-## Task 29: IAM Roles and Least-Privilege Policies
+## Task 31: IAM Roles and Least-Privilege Policies
 
 - [ ] Review and tighten all IAM roles created in previous tasks
 - [ ] Lambda ingress role: only `sqs:SendMessage`, `secretsmanager:GetSecretValue` (scoped to Slack secret)
@@ -425,7 +470,7 @@
 
 ---
 
-## Task 30: End-to-End Integration Test
+## Task 32: End-to-End Integration Test
 
 - [ ] Create integration test that exercises the full query flow: Slack event → API Gateway → Lambda → SQS → ECS RAG orchestrator → OpenSearch + Bedrock → Slack response
 - [ ] Pre-index a small set of known test documents into OpenSearch
@@ -438,7 +483,7 @@
 
 ---
 
-## Task 31: CDK Stack Composition and Deployment Configuration
+## Task 33: CDK Stack Composition and Deployment Configuration
 
 - [ ] Create `stacks/sage_kb_chatbot_stack.py` that composes all constructs
 - [ ] Wire cross-construct references (VPC, security groups, secrets ARNs, queue URLs, DB endpoints, OpenSearch domain)

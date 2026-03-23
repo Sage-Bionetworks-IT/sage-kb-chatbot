@@ -20,6 +20,8 @@
 Build an internal Slack chatbot that accepts employee questions and returns answers derived from Sage Bionetworks internal knowledge sources, including:
 
 - Confluence (all spaces in scope)
+- Slack (public channels and threads)
+- Jira (all projects in scope)
 - Synapse
 - intranet
 - GitHub (all repositories under `Sage-Bionetworks` and `Sage-Bionetworks-IT` are in scope)
@@ -87,6 +89,8 @@ The solution is successful if it:
 - Slack bot interface
 - RAG pipeline
 - Confluence connector (all spaces in scope)
+- Slack connector (public channels and threads)
+- Jira connector (all projects in scope)
 - GitHub connector for all repositories under `Sage-Bionetworks` and `Sage-Bionetworks-IT`
 - intranet connector
 - PowerDMS connector
@@ -175,6 +179,8 @@ The system shall:
 
 ### 6.4 Freshness Targets
 - Confluence (all spaces): within 6 hours
+- Slack (public channels): within 1 hour
+- Jira (all projects): within 1 hour
 - GitHub repos under `Sage-Bionetworks` and `Sage-Bionetworks-IT`: within 1 hour
 - intranet: within 12 hours
 - PowerDMS: within 12 hours
@@ -363,9 +369,11 @@ Ranking shall consider:
 Default weighting:
 1. PowerDMS approved SOP/policy
 2. official Confluence spaces
-3. GitHub docs/runbooks
-4. approved intranet pages
-5. other approved supporting content
+3. Jira issues and project documentation
+4. GitHub docs/runbooks
+5. approved intranet pages
+6. Slack messages (public channels and threads)
+7. other approved supporting content
 
 Governance owners may override this ordering.
 
@@ -416,7 +424,34 @@ Must support:
 - canonical link
 - update detection
 
-### 11.5 Synapse (Phase 2)
+### 11.5 Slack
+Public Slack channels and threads are in scope. Private channels and DMs are excluded.
+
+Must support:
+- message text extraction (including threaded replies)
+- channel name and topic metadata
+- author (Slack user ID)
+- message permalink (canonical URL)
+- timestamp for freshness and update detection
+- incremental sync using Slack Conversations API cursor-based pagination
+- filtering out bot messages and ephemeral content
+- respecting Slack API rate limits
+
+### 11.6 Jira
+All Jira projects are in scope.
+
+Must support:
+- issue summary, description, and comments extraction
+- project key and project name metadata
+- issue type, status, priority, and labels
+- assignee and reporter metadata
+- canonical issue URL (permalink)
+- last updated timestamp for freshness and update detection
+- incremental sync using JQL `updated` filter
+- attachment text extraction where feasible (PDF, DOCX)
+- respecting Jira API rate limits
+
+### 11.7 Synapse (Phase 2)
 Must support:
 - documentation
 - approved metadata
@@ -424,7 +459,7 @@ Must support:
 - source link
 - access metadata
 
-### 11.6 Leapsome (Deferred)
+### 11.8 Leapsome (Deferred)
 Requires explicit security/governance approval before indexing.
 
 ---
@@ -449,6 +484,7 @@ All credentials shall be stored in AWS Secrets Manager, including:
 - Slack tokens
 - Confluence credentials
 - GitHub app credentials
+- Jira credentials
 - PowerDMS credentials
 - Synapse credentials
 - Leapsome credentials if later enabled
@@ -785,6 +821,8 @@ Alert on:
 ### Phase 1: MVP
 Sources:
 - Confluence (all spaces)
+- Slack (public channels and threads)
+- Jira (all projects)
 - intranet
 - GitHub repos under `Sage-Bionetworks` and `Sage-Bionetworks-IT`
 - PowerDMS
@@ -816,7 +854,7 @@ Capabilities:
 
 ### MVP Acceptance Criteria
 - A user can ask a question in Slack and receive a cited answer.
-- The system retrieves from all Confluence spaces, GitHub repositories under `Sage-Bionetworks` and `Sage-Bionetworks-IT`, intranet, and PowerDMS.
+- The system retrieves from all Confluence spaces, Slack public channels, Jira projects, GitHub repositories under `Sage-Bionetworks` and `Sage-Bionetworks-IT`, intranet, and PowerDMS.
 - Median response time is under 8 seconds.
 - Secrets are stored only in Secrets Manager.
 - Queries and feedback are logged.
