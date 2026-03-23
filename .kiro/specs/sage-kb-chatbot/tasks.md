@@ -1,5 +1,17 @@
 # Implementation Tasks — Sage Internal Knowledge Slack Chatbot
 
+## Task 0: Prerequisites and Account Setup
+
+- [ ] Create the Slack App in the Sage workspace: configure bot scopes (`app_mentions:read`, `chat:write`, `commands`, `channels:history`, `channels:read`, `groups:read`, `im:history`, `im:read`, `im:write`, `users:read`, `users:read.email`, `usergroups:read`), enable Events API subscription, register slash command `/sage-ask`, configure Interactivity Request URL
+- [ ] Request Amazon Bedrock model access in the target AWS account/region for: Amazon Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`) and the chosen generation model (e.g., Anthropic Claude 3 Sonnet/Haiku)
+- [ ] Ensure the OpenSearch Service Linked Role exists in the AWS account (`aws iam create-service-linked-role --aws-service-name es.amazonaws.com` — idempotent, safe to run if already exists)
+- [ ] Confirm AWS CDK bootstrap has been run in the target account/region (`cdk bootstrap aws://ACCOUNT/REGION`)
+- [ ] Document the `DEPLOY_ENV` values and corresponding AWS account/region mappings for dev, staging, and prod
+
+**References**: requirements.md §8.1; design.md §Dependencies
+
+---
+
 ## Task 1: Project Scaffolding and CDK Bootstrap
 
 - [ ] Initialize a Python CDK project using `cdk init app --language python`
@@ -39,6 +51,7 @@
 - [ ] Add foreign key relationships: `chunks.document_id → documents.id`, `queries.user_id → users.id`, `query_sources.query_id → queries.id`, `query_sources.document_id → documents.id`, `query_sources.chunk_id → chunks.id`, `feedback.query_id → queries.id`, `feedback.user_id → users.id`, `ingestion_runs.connector_status_id → connector_status.id`
 - [ ] Add indexes on: `users.slack_user_id`, `users.email`, `documents.source_system`, `documents.source_document_id`, `connector_status` unique composite, `ingestion_runs.connector_status_id`, `queries.user_id`, `queries.created_at`
 - [ ] Choose and configure a migration runner (e.g., Alembic with SQLAlchemy, or Flyway via Lambda custom resource)
+- [ ] Wire migration execution into the deployment pipeline (e.g., CDK custom resource Lambda or ECS RunTask pre-deploy step) so migrations run automatically on `cdk deploy`
 - [ ] Write fine-grained assertions test `tests/test_database.py`
 
 **References**: requirements.md §13 (full data model); design.md §Component 6, §Data Models
@@ -107,6 +120,7 @@
 - [ ] Construct SQS message payload and enqueue to the async handoff queue
 - [ ] Return HTTP 200 immediately (within 3 seconds)
 - [ ] Handle Slack URL verification challenge (`url_verification` event)
+- [ ] Handle Slack interactive payloads (button clicks from feedback controls): parse `payload` JSON from `application/x-www-form-urlencoded` body, extract `action_id`, `user`, `trigger_id`, and route through SQS to the RAG orchestrator
 - [ ] Reject unsigned or malformed requests with 401/400
 - [ ] Grant Lambda read access to Slack signing secret in Secrets Manager
 - [ ] Grant Lambda `sqs:SendMessage` on the query queue
@@ -120,7 +134,8 @@
 
 - [ ] Create `constructs/slack_api.py` construct
 - [ ] Create REST API Gateway with a `POST /slack/events` endpoint
-- [ ] Integrate with the Slack Ingress Lambda (proxy integration)
+- [ ] Create `POST /slack/interactions` endpoint for Slack interactive payloads (button clicks, modals)
+- [ ] Integrate both endpoints with the Slack Ingress Lambda (proxy integration)
 - [ ] Configure throttling defaults
 - [ ] Enable CloudWatch access logging
 - [ ] Output the webhook URL for Slack app configuration
@@ -136,7 +151,7 @@
 - [ ] Create ECS Cluster in the VPC
 - [ ] Define Fargate task definition with appropriate CPU/memory (e.g., 1 vCPU, 4 GB)
 - [ ] Create container image project structure at `containers/rag_orchestrator/` (Dockerfile, `main.py`, `requirements.txt`)
-- [ ] Configure ECS Service with `desired_count=2` (warm tasks), private subnet placement
+- [ ] Configure ECS Service with environment-specific `desired_count` (1 for dev/staging, 2 for prod), private subnet placement
 - [ ] Configure SQS-based auto-scaling (scale on `ApproximateNumberOfMessagesVisible`)
 - [ ] Grant task role permissions: SQS consume/delete, Secrets Manager read, OpenSearch data access, RDS connect, Bedrock invoke, Slack API (outbound HTTPS)
 - [ ] Configure environment variables / secrets injection for DB connection, OpenSearch endpoint, SQS queue URL, Slack bot token ARN
@@ -312,6 +327,10 @@
     - slack_group_handle: "@sage-it"
       authorization_group: "it-staff"
       permitted_source_scopes: ["confluence:all", "github:all", "jira:it-projects", "powerdms:all", "slack:it-channels"]
+      enabled: true
+    - slack_group_handle: "@sage-hr-access"
+      authorization_group: "hr-content"
+      permitted_source_scopes: ["powerdms:hr", "confluence:hr-space"]
       enabled: true
   ```
 - [ ] Implement CDK custom resource Lambda (`lambda/seed_group_mapping/handler.py`) that:
@@ -494,6 +513,7 @@
   - OpenSearch cluster health (red/yellow)
   - Elevated low-confidence rate
 - [ ] Configure SNS topic for alarm notifications
+- [ ] Create CloudWatch dashboard with widgets for: request volume, median/p95 latency, no-answer rate, connector health, ingestion freshness lag, SQS queue depth, Bedrock invocation metrics, OpenSearch cluster health
 - [ ] Enable CloudTrail for AWS API audit logging
 - [ ] Write fine-grained assertions test `tests/test_observability.py`
 
@@ -536,7 +556,7 @@
 - [ ] Create `stacks/sage_kb_chatbot_stack.py` that composes all constructs
 - [ ] Wire cross-construct references (VPC, security groups, secrets ARNs, queue URLs, DB endpoints, OpenSearch domain)
 - [ ] Create environment-specific configurations (dev, staging, prod) with appropriate sizing
-- [ ] Configure CDK context for account/region values (no `cdk.context.json` for secrets)
+- [ ] Configure environment-specific values via constructor props and environment variables (do not use CDK context)
 - [ ] Verify `cdk synth` produces valid templates for each environment
 - [ ] Write snapshot test `tests/test_sage_kb_chatbot_stack.py`
 

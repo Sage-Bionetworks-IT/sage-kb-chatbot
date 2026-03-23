@@ -113,6 +113,7 @@ graph TD
 **Responsibilities**:
 - Validate Slack request signatures using the signing secret
 - Parse event type (app_mention, message, slash command `/sage-ask`)
+- Parse Slack interactive payloads (button clicks from feedback controls): extract `action_id`, `user`, `trigger_id`
 - Extract user ID, channel ID, question text, and thread timestamp
 - Enqueue a structured message to SQS
 - Return HTTP 200 acknowledgment to Slack immediately
@@ -543,7 +544,7 @@ erDiagram
 
 ### Key Data Model Notes
 
-- **connector_status** is updated in place and provides the latest health/checkpoint view per connector scope. Uniqueness is enforced across (`connector_key`, `connector_scope`, `scope_identifier`, `environment`).
+- **connector_status** is updated in place and provides the latest health/checkpoint view per connector scope. Uniqueness is enforced across (`connector_key`, `connector_scope`, `scope_identifier`, `environment`). Note: Slack and Jira connectors track status per channel/project respectively, which may produce hundreds of rows; any future admin view should support pagination and filtering.
 - **ingestion_runs** is append-only and provides operational history and auditability. Each run links back to its `connector_status` record.
 - **documents** tracks the canonical metadata for each ingested document. The `hash` field enables change detection for incremental syncs.
 - **chunks** links PostgreSQL metadata to the corresponding OpenSearch document via `opensearch_id`.

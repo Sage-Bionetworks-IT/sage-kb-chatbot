@@ -23,10 +23,10 @@ Build an internal Slack chatbot that accepts employee questions and returns answ
 - Confluence (all spaces in scope)
 - Slack (public channels and threads)
 - Jira (all projects in scope)
-- Synapse
 - intranet
 - GitHub (all repositories under `Sage-Bionetworks` and `Sage-Bionetworks-IT` are in scope)
 - PowerDMS
+- Synapse (Phase 2)
 - Leapsome (deferred / later phase)
 
 The chatbot must provide:
@@ -262,13 +262,12 @@ Ingestion Plane
 
 ### 8.2 Optional Later Services
 - AWS Step Functions (complex multi-step orchestration if needed in future)
-- Amazon ElastiCache for Redis
+- Amazon ElastiCache for Redis (query/embedding caching)
 - AWS WAF
 - Amazon Macie
 - AWS X-Ray
 - AWS Security Hub
 - Amazon GuardDuty
-
 ---
 
 ## 9. RAG Design
