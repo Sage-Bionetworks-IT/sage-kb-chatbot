@@ -326,7 +326,7 @@ The system shall use LlamaIndex's `PromptTemplate` to build a prompt containing:
 - prompt injection defenses (sanitize node content before prompt assembly)
 
 ### 9.4 Generation
-The system shall use LlamaIndex's `Bedrock` LLM class for answer generation. The LLM shall:
+The system shall use **Anthropic Claude Sonnet** via LlamaIndex's `Bedrock` LLM class for answer generation. The LLM shall:
 - answer only from provided context
 - cite evidence
 - note uncertainty

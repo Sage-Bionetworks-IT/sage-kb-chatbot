@@ -290,7 +290,7 @@ Each connector worker is responsible for managing its own `ingestion_runs` and `
 
 **Two usage modes**:
 - **Embeddings**: Amazon Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`, 1024 dimensions) via `BedrockEmbedding` for document chunk and query embedding
-- **Generation**: LLM invocation via `Bedrock` LLM class for answer generation with grounding rules, citation instructions, and confidence assessment
+- **Generation**: Anthropic Claude Sonnet invocation via `Bedrock` LLM class for answer generation with grounding rules, citation instructions, and confidence assessment
 
 ---
 
