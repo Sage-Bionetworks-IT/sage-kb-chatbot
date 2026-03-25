@@ -20,8 +20,8 @@ Ingestion: EventBridge → ECS Fargate (connector workers)
                                               └── PowerDMS
 
 Identity: EventBridge (every 15 min) → ECS Fargate (Slack User Groups sync → PostgreSQL)
-```
-![Sage KB Chatbot Architecture](docs/sage-kb-chatbot-architecture.png)
+```![Sage KB Chatbot Architecture](docs/sage-kb-chatbot-architecture.drawio.png)
+
 
 
 ## Knowledge Sources (MVP)
