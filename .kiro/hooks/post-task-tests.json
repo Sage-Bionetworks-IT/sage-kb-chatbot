@@ -7,6 +7,6 @@
   },
   "then": {
     "type": "runCommand",
-    "command": "npm test -- --watchAll=false 2>/dev/null || npx vitest run 2>/dev/null || npx jest --bail 2>/dev/null || echo 'No test runner found'"
+    "command": "pytest -q --tb=short 2>/dev/null || echo 'No test runner found'"
   }
 }

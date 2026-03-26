@@ -4,19 +4,19 @@ inclusion: manual
 
 # TDD Workflow Skill
 
-Activate this skill when implementing new features, fixing bugs, or refactoring code.
+Activate this skill when implementing new features, fixing bugs, or refactoring Python code.
 
 ## The Cycle: RED → GREEN → REFACTOR
 
 ### Step 1: Define the Interface (SCAFFOLD)
-- Define types/interfaces for inputs and outputs
-- Create function stubs that throw "Not implemented"
+- Define type hints and function signatures
+- Create function/class stubs that raise `NotImplementedError`
 - Clarify the contract before writing any logic
 
 ### Step 2: Write Failing Tests (RED)
 - Write tests that describe the desired behavior
 - Cover happy path, edge cases, and error scenarios
-- Run tests — they MUST fail (confirms tests are actually testing something)
+- Run tests — they MUST fail (`pytest -q`)
 
 ### Step 3: Implement Minimal Code (GREEN)
 - Write the simplest code that makes all tests pass
@@ -29,31 +29,39 @@ Activate this skill when implementing new features, fixing bugs, or refactoring 
 - Run tests after each refactoring step
 
 ### Step 5: Verify Coverage
-- Check coverage is at 80%+
+- Check coverage is at 80%+: `pytest --cov --cov-report=term-missing -q`
 - Add tests for any uncovered paths
 - Focus on meaningful coverage, not just line count
 
 ## Test Structure Template
 
-```
-describe('[Module/Function Name]', () => {
-  describe('happy path', () => {
-    it('should [expected behavior] when [condition]', () => {
-      // Arrange → Act → Assert
-    });
-  });
+```python
+import pytest
+from unittest.mock import MagicMock, patch
 
-  describe('edge cases', () => {
-    it('should handle empty input', () => {});
-    it('should handle null/undefined', () => {});
-    it('should handle boundary values', () => {});
-  });
 
-  describe('error cases', () => {
-    it('should throw when [invalid condition]', () => {});
-    it('should return fallback when [failure condition]', () => {});
-  });
-});
+class TestModuleName:
+    """Tests for [Module/Function Name]."""
+
+    def test_happy_path_when_valid_input(self):
+        # Arrange
+        input_data = {...}
+        # Act
+        result = function_under_test(input_data)
+        # Assert
+        assert result == expected
+
+    def test_raises_value_error_on_empty_input(self):
+        with pytest.raises(ValueError, match="Input cannot be empty"):
+            function_under_test({})
+
+    @pytest.mark.parametrize("input,expected", [
+        (None, None),
+        ("", ""),
+        ("valid", "VALID"),
+    ])
+    def test_edge_cases(self, input, expected):
+        assert function_under_test(input) == expected
 ```
 
 ## Rules
@@ -61,5 +69,5 @@ describe('[Module/Function Name]', () => {
 - NEVER write implementation before tests
 - NEVER modify tests to make them pass (fix the implementation)
 - Each test should test ONE behavior
-- Tests should be independent (no shared mutable state)
-- Mock external dependencies, not internal logic
+- Tests should be independent (no shared mutable state between tests)
+- Mock external dependencies (`boto3`, `opensearch`, `slack_sdk`), not internal logic

@@ -1,13 +1,13 @@
 {
   "name": "Run Tests on Save",
   "version": "1.0.0",
-  "description": "Automatically run related tests when test files are saved",
+  "description": "Automatically run related tests when Python test files are saved",
   "when": {
     "type": "fileEdited",
-    "patterns": ["*.test.*", "*.spec.*"]
+    "patterns": ["**/test_*.py", "**/*_test.py"]
   },
   "then": {
     "type": "runCommand",
-    "command": "npx jest --bail --findRelatedTests ${file} 2>/dev/null || npx vitest run ${file} 2>/dev/null || true"
+    "command": "pytest -q --tb=short ${file} 2>/dev/null || true"
   }
 }

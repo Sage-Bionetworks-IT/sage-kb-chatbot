@@ -9,15 +9,14 @@ inclusion: always
 - [ ] No hardcoded secrets (API keys, passwords, tokens, connection strings)
 - [ ] All user inputs validated and sanitized
 - [ ] SQL injection prevention (parameterized queries only)
-- [ ] XSS prevention (sanitized/escaped output)
-- [ ] Authentication/authorization verified on protected routes
+- [ ] Authentication/authorization verified on protected endpoints
 - [ ] Error messages don't leak sensitive data or stack traces
 - [ ] No sensitive data in logs
 
 ## Secret Management
 
 - NEVER hardcode secrets in source code
-- ALWAYS use environment variables or a secret manager
+- ALWAYS use environment variables or AWS Secrets Manager
 - Validate required secrets are present at startup
 - Rotate any secrets that may have been exposed
 - Use .env files locally, never commit them
@@ -25,24 +24,24 @@ inclusion: always
 ## OWASP Top 10 Awareness
 
 When writing code that handles user input, auth, or data:
-1. **Injection** — Always use parameterized queries
-2. **Broken Auth** — Hash passwords (bcrypt/argon2), validate JWTs
+1. **Injection** — Always use parameterized queries (SQLAlchemy bind params, psycopg2 `%s` placeholders)
+2. **Broken Auth** — Hash passwords (bcrypt/argon2), validate tokens properly
 3. **Sensitive Data** — Encrypt PII, enforce HTTPS, sanitize logs
-4. **XSS** — Escape output, use framework auto-escaping, set CSP headers
-5. **Broken Access Control** — Check auth on every route, configure CORS properly
-6. **Misconfiguration** — No default creds, debug mode off in prod
-7. **Known Vulnerabilities** — Keep dependencies updated, run `npm audit`
+4. **Broken Access Control** — Check auth on every endpoint
+5. **Misconfiguration** — No default creds, debug mode off in prod
+6. **Known Vulnerabilities** — Keep dependencies updated, run `pip-audit` or `safety check`
 
 ## Dangerous Patterns to Flag Immediately
 
 | Pattern | Severity | Fix |
 |---------|----------|-----|
-| Hardcoded secrets | CRITICAL | Use `process.env` |
+| Hardcoded secrets | CRITICAL | Use `os.environ` or Secrets Manager |
 | String-concatenated SQL | CRITICAL | Parameterized queries |
-| `innerHTML = userInput` | HIGH | Use `textContent` or sanitizer |
-| No auth check on route | CRITICAL | Add auth middleware |
+| `eval()` / `exec()` with user input | CRITICAL | Never use with external data |
+| `pickle.loads()` on untrusted data | CRITICAL | Use JSON or safe deserialization |
+| No auth check on endpoint | CRITICAL | Add auth decorator/middleware |
 | Logging passwords/tokens | MEDIUM | Sanitize log output |
-| `eval()` with user input | CRITICAL | Never use eval with external data |
+| `subprocess.shell=True` with user input | HIGH | Use `subprocess.run()` with list args |
 
 ## If a Security Issue Is Found
 

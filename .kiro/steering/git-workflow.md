@@ -15,30 +15,30 @@ Types: feat, fix, docs, style, refactor, test, chore
 
 Examples:
 ```
-feat(cart): add quantity validation
-fix(auth): handle expired token refresh
-refactor(api): extract middleware helpers
-test(products): add edge case coverage
+feat(connector): add Confluence incremental sync
+fix(rag): handle Bedrock timeout with retry
+refactor(identity): extract group mapping logic
+test(slack-ingress): add signature validation tests
 ```
 
 ## Branching
 
-- Feature branches for new development: `feature/user-auth`
-- Bug fix branches: `fix/login-bug`
+- Feature branches for new development: `feature/confluence-connector`
+- Bug fix branches: `fix/opensearch-timeout`
 - Keep `main` stable and deployable
 - Delete merged branches
 
 ## Before Committing
 
-- [ ] Run tests and verify they pass
+- [ ] Run tests and verify they pass (`pytest -q`)
 - [ ] No hardcoded secrets or API keys
-- [ ] No debug logging left in code
+- [ ] No `print()` or debug logging left in code
 - [ ] Changes are logically grouped (atomic commits)
 - [ ] Commit message follows conventional format
 
 ## Security
 
 - NEVER commit secrets, API keys, or passwords
-- Use environment variables for configuration
+- Use environment variables or AWS Secrets Manager
 - Review diffs for sensitive information before pushing
-- Use .gitignore to exclude build artifacts, node_modules, .env files
+- Use .gitignore to exclude `cdk.out/`, `.venv/`, `__pycache__/`, `.env` files

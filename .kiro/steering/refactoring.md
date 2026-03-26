@@ -17,54 +17,56 @@ Activate this skill for safe, systematic code improvement.
 
 ### Extract Function
 When a block of code does something that can be named:
-```
-// Before: inline logic
-if (user.age >= 18 && user.verified && !user.banned) { ... }
+```python
+# Before: inline logic
+if user.age >= 18 and user.verified and not user.banned:
+    ...
 
-// After: extracted with clear name
-if (isEligibleUser(user)) { ... }
+# After: extracted with clear name
+if is_eligible_user(user):
+    ...
 ```
 
 ### Early Return
 When deep nesting makes code hard to follow:
-```
-// Before: nested
-function process(data) {
-  if (data) {
-    if (data.valid) {
-      // actual logic
-    }
-  }
-}
+```python
+# Before: nested
+def process(data):
+    if data:
+        if data.get("valid"):
+            # actual logic
 
-// After: early returns
-function process(data) {
-  if (!data) return;
-  if (!data.valid) return;
-  // actual logic
-}
+# After: early returns
+def process(data):
+    if not data:
+        return
+    if not data.get("valid"):
+        return
+    # actual logic
 ```
 
 ### Replace Magic Numbers
-```
-// Before
-if (retries > 3) { ... }
+```python
+# Before
+if retries > 3:
+    ...
 
-// After
-const MAX_RETRIES = 3;
-if (retries > MAX_RETRIES) { ... }
+# After
+MAX_RETRIES = 3
+if retries > MAX_RETRIES:
+    ...
 ```
 
 ### Split Large Files
-When a file exceeds 800 lines:
+When a file exceeds 500 lines:
 1. Identify distinct responsibilities
 2. Extract each into its own module
-3. Re-export from original if needed for backward compatibility
+3. Re-export from original `__init__.py` if needed for backward compatibility
 4. Update imports across codebase
 
 ### Dead Code Removal
 - Remove commented-out code (it's in git history)
-- Remove unused imports
+- Remove unused imports (use `autoflake` or `ruff`)
 - Remove unreachable branches
 - Remove unused functions/variables
 
@@ -73,15 +75,15 @@ When a file exceeds 800 lines:
 1. Identify the smell (large file, deep nesting, duplication, etc.)
 2. Verify test coverage exists for affected code
 3. Apply one refactoring pattern
-4. Run tests — must still pass
+4. Run tests — must still pass (`pytest -q`)
 5. Commit
 6. Repeat
 
 ## Red Flags That Need Refactoring
 
 - Functions over 50 lines
-- Files over 800 lines
+- Files over 500 lines
 - Nesting deeper than 4 levels
 - Duplicated code in 3+ places
-- God objects/functions that do everything
-- Long parameter lists (>4 params — use an options object)
+- God classes/functions that do everything
+- Long parameter lists (>4 params — use a dataclass or TypedDict)

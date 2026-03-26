@@ -4,17 +4,19 @@ inclusion: always
 
 # Coding Style
 
-## Immutability (CRITICAL)
+## Immutability
 
-ALWAYS create new objects, NEVER mutate existing ones:
-- Use spread operators, map, filter — not in-place mutation
-- Immutable data prevents hidden side effects and enables safe concurrency
+Prefer immutable patterns where practical:
+- Return new objects/dicts rather than mutating in place
+- Use `tuple` over `list` for fixed collections
+- Use `frozenset` for immutable sets
+- Use `dataclasses(frozen=True)` or Pydantic `model_config = ConfigDict(frozen=True)` for value objects
 
 ## File Organization
 
 MANY SMALL FILES > FEW LARGE FILES:
 - High cohesion, low coupling
-- 200-400 lines typical, 800 max
+- 200-400 lines typical, 500 max
 - Extract utilities from large modules
 - Organize by feature/domain, not by type
 
@@ -22,34 +24,37 @@ MANY SMALL FILES > FEW LARGE FILES:
 
 ALWAYS handle errors comprehensively:
 - Handle errors explicitly at every level
-- Provide user-friendly error messages in UI-facing code
-- Log detailed error context on the server side
+- Use specific exception types, never bare `except:`
+- Log detailed error context with `logging` module
 - Never silently swallow errors
-- Use try/catch for async operations
+- Use try/except with specific exceptions
 
 ## Input Validation
 
 ALWAYS validate at system boundaries:
 - Validate all user input before processing
-- Use schema-based validation where available
+- Use Pydantic models or schema-based validation
 - Fail fast with clear error messages
 - Never trust external data (API responses, user input, file content)
 
 ## Naming Conventions
 
-- Functions: verb + noun (`getUserById`, `calculateTotal`)
-- Booleans: `is`/`has`/`should` prefix (`isActive`, `hasPermission`)
-- Constants: UPPER_SNAKE_CASE for true constants
-- Files: kebab-case or match framework convention
+- Functions/variables: `snake_case` (`get_user_by_id`, `calculate_total`)
+- Classes: `PascalCase` (`UserService`, `DocumentProcessor`)
+- Booleans: `is_`/`has_`/`should_` prefix (`is_active`, `has_permission`)
+- Constants: `UPPER_SNAKE_CASE` for true constants
+- Files/modules: `snake_case` matching class or purpose
+- Private: prefix with `_` (`_internal_helper`)
 
 ## Code Quality Checklist
 
 Before marking work complete:
 - [ ] Code is readable and well-named
 - [ ] Functions are small (<50 lines)
-- [ ] Files are focused (<800 lines)
+- [ ] Files are focused (<500 lines)
 - [ ] No deep nesting (>4 levels — use early returns)
 - [ ] Proper error handling at every level
 - [ ] No hardcoded values (use constants or config)
-- [ ] No mutation (immutable patterns used)
-- [ ] No console.log left in production code
+- [ ] Type hints on all function signatures
+- [ ] No `print()` left in production code (use `logging`)
+- [ ] Docstrings on public functions and classes

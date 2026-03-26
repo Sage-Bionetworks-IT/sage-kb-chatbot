@@ -18,30 +18,32 @@ Activate this skill to perform a structured code review on recent changes.
 
 ### CRITICAL — Security
 - Hardcoded secrets (API keys, passwords, tokens)
-- SQL injection (string concatenation in queries)
-- XSS (unescaped user input in HTML)
-- Missing auth checks on protected routes
+- SQL injection (string concatenation in queries — use parameterized queries)
+- `eval()` / `exec()` with external input
+- `pickle.loads()` on untrusted data
+- Missing auth checks on protected endpoints
 - Exposed secrets in logs
 
 ### HIGH — Code Quality
 - Large functions (>50 lines) — split them
-- Large files (>800 lines) — extract modules
+- Large files (>500 lines) — extract modules
 - Deep nesting (>4 levels) — use early returns
-- Missing error handling — unhandled promises, empty catch blocks
-- Mutation patterns — prefer immutable operations
+- Missing error handling — bare `except:`, empty except blocks
+- Missing type hints on public functions
 - Dead code — unused imports, commented-out code
 - Missing tests for new code paths
 
 ### MEDIUM — Maintainability
 - Unclear naming — variables/functions should describe their purpose
-- Missing documentation for complex logic
+- Missing docstrings on public functions and classes
 - Duplicated code that should be extracted
 - Inconsistent patterns within the codebase
 - Magic numbers without named constants
+- `print()` statements left in production code (use `logging`)
 
 ### LOW — Style
-- Formatting inconsistencies (should be caught by linter)
-- Import ordering
+- PEP 8 formatting inconsistencies (should be caught by black/flake8)
+- Import ordering (should be caught by isort)
 - Trailing whitespace
 
 ## Output Format

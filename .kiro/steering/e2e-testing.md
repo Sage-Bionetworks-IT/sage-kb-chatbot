@@ -4,75 +4,72 @@ inclusion: manual
 
 # E2E Testing Skill
 
-Activate this skill when writing end-to-end tests with Playwright or similar tools.
+Activate this skill when writing end-to-end or integration tests for the RAG pipeline and connectors.
 
 ## Test Structure
 
-### Page Object Model
-Encapsulate page interactions in reusable objects:
+### Fixture Pattern
+Encapsulate setup in reusable pytest fixtures:
 
-```typescript
-class ProductPage {
-  constructor(private page: Page) {}
+```python
+import pytest
 
-  async navigate(productId: string) {
-    await this.page.goto(`/products/${productId}`);
-  }
+@pytest.fixture
+def opensearch_client():
+    client = get_test_opensearch_client()
+    yield client
+    # teardown: clean up test index
+    client.indices.delete(index="test-*", ignore_unavailable=True)
 
-  async addToCart() {
-    await this.page.click('[data-testid="add-to-cart"]');
-  }
-
-  async getPrice() {
-    return this.page.textContent('[data-testid="price"]');
-  }
-}
+@pytest.fixture
+def seeded_index(opensearch_client):
+    index_test_documents(opensearch_client)
+    return opensearch_client
 ```
 
 ### Test Pattern
 
-```typescript
-test('user can add product to cart', async ({ page }) => {
-  // Arrange — navigate to product
-  const productPage = new ProductPage(page);
-  await productPage.navigate('123');
+```python
+def test_rag_query_returns_cited_answer(seeded_index, mock_bedrock):
+    # Arrange
+    query = "What is the SOP for data access requests?"
 
-  // Act — add to cart
-  await productPage.addToCart();
+    # Act
+    result = run_rag_query(query, user_id="U123", opensearch_client=seeded_index)
 
-  // Assert — verify cart updated
-  await expect(page.locator('[data-testid="cart-count"]'))
-    .toHaveText('1');
-});
+    # Assert
+    assert result.answer is not None
+    assert len(result.sources) > 0
+    assert result.confidence in ("High", "Medium", "Low")
 ```
 
 ## Best Practices
 
-- Use `data-testid` attributes for test selectors (stable, not tied to styling)
-- Wait for elements explicitly — don't use arbitrary timeouts
-- Test user journeys, not implementation details
+- Use pytest fixtures for test setup/teardown
+- Use `pytest.mark.parametrize` for multiple input scenarios
+- Test user-observable behavior, not internal implementation
 - Keep tests independent — each test starts from a clean state
-- Use fixtures for common setup (login, seed data)
+- Use `moto` for mocking AWS services (S3, SQS, Secrets Manager)
+- Use `unittest.mock.patch` or `pytest-mock` for Bedrock/OpenSearch
 
 ## What to Test E2E
 
-- Critical user flows (signup, login, checkout, core features)
-- Cross-page navigation
-- Form submissions with validation
-- Error states and recovery
-- Responsive behavior on different viewports
+- Full query flow: SQS message → identity lookup → retrieval → generation → Slack response
+- Connector ingestion: fetch → chunk → embed → index
+- Rate limiting behavior under concurrent load
+- Authorization filtering (restricted content not returned to unauthorized users)
+- Feedback flow: interaction payload → storage
 
 ## What NOT to Test E2E
 
-- Individual component rendering (use unit tests)
-- API response formats (use integration tests)
-- CSS styling details
-- Every possible input combination
+- Individual utility functions (use unit tests)
+- CDK construct synthesis (use CDK assertions)
+- Every possible input combination (use parametrize in unit tests)
 
 ## Debugging Failed Tests
 
-1. Check screenshots/videos from test run
-2. Look at network requests for failed API calls
-3. Check console errors in the browser
-4. Run the specific test in headed mode for visual debugging
-5. Add `await page.pause()` to stop at a specific point
+1. Check pytest output with `-v` and `--tb=long`
+2. Look at mock call args to verify correct API calls
+3. Run the specific test in isolation: `pytest -k "test_name" -s`
+4. Add `breakpoint()` to stop at a specific point
+5. Check fixture teardown for leftover state
