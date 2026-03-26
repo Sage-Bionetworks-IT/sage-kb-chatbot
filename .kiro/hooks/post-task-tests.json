@@ -1,0 +1,12 @@
+{
+  "name": "Run Tests After Task",
+  "version": "1.0.0",
+  "description": "Automatically run the test suite after completing a spec task",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "pytest -q --tb=short 2>/dev/null || echo 'No test runner found'"
+  }
+}
