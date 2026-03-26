@@ -1,0 +1,13 @@
+{
+  "name": "Run Tests on Save",
+  "version": "1.0.0",
+  "description": "Automatically run related tests when Python test files are saved",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["**/test_*.py", "**/*_test.py"]
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "pytest -q --tb=short ${file} 2>/dev/null || true"
+  }
+}

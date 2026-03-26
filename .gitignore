@@ -36,3 +36,6 @@ logs/
 # Kiro settings (optional - remove if you want to share MCP config)
 # .kiro/settings/
 blog*
+
+# Generated Diagrams
+generated-diagrams/
