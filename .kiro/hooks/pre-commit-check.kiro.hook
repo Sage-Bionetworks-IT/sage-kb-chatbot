@@ -1,5 +1,4 @@
 {
-  "enabled": true,
   "name": "Pre-commit Check",
   "description": "Runs pre-commit hooks on staged files before a git commit is created",
   "version": "1",
