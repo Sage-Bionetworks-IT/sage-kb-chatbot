@@ -1,118 +1,141 @@
-<mxfile host="app.diagrams.net" modified="2026-03-25" version="21.0.0">
+<mxfile host="app.diagrams.net" modified="2026-03-27" version="21.0.0">
   <diagram name="Sage KB Chatbot Architecture" id="sage-kb-chatbot">
-    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+    <mxGraphModel dx="1600" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1300" math="0" shadow="0">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-
-        <!-- ===== QUERY PATH ===== -->
-
-        <!-- Slack User -->
+        <mxCell id="lbl_query" value="Query Path" style="text;fontStyle=3;fontSize=14;fontColor=#0066CC;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="140" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="lbl_data" value="Data Plane" style="text;fontStyle=3;fontSize=14;fontColor=#009900;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="40" width="140" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="lbl_ingest" value="Ingestion Path" style="text;fontStyle=3;fontSize=14;fontColor=#CC9900;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="520" width="160" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="lbl_identity" value="Identity Sync" style="text;fontStyle=3;fontSize=14;fontColor=#6600CC;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="920" width="140" height="30" as="geometry"/>
+        </mxCell>
         <mxCell id="slack_user" value="Slack" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.general;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=12;fillColor=#E6F2FF;strokeColor=#0066CC;" vertex="1" parent="1">
-          <mxGeometry x="60" y="340" width="60" height="60" as="geometry"/>
+          <mxGeometry x="60" y="100" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- API Gateway -->
         <mxCell id="apigw" value="API Gateway" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#E6F2FF;strokeColor=#0066CC;" vertex="1" parent="1">
-          <mxGeometry x="220" y="340" width="60" height="60" as="geometry"/>
+          <mxGeometry x="240" y="100" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- Lambda -->
         <mxCell id="lambda" value="Lambda&#xa;(Ingress)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#FFF0E6;strokeColor=#FF6600;" vertex="1" parent="1">
-          <mxGeometry x="380" y="340" width="60" height="60" as="geometry"/>
+          <mxGeometry x="440" y="100" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- SQS -->
         <mxCell id="sqs" value="SQS&#xa;(Async Handoff)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.sqs;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#FFF0E6;strokeColor=#FF6600;" vertex="1" parent="1">
-          <mxGeometry x="540" y="340" width="60" height="60" as="geometry"/>
+          <mxGeometry x="640" y="100" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- ECS Fargate RAG Orchestrator -->
-        <mxCell id="ecs_rag" value="ECS Fargate&#xa;(RAG Orchestrator)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#FFF0E6;strokeColor=#FF6600;" vertex="1" parent="1">
-          <mxGeometry x="720" y="340" width="60" height="60" as="geometry"/>
+        <mxCell id="ecs_rag_container" value="" style="rounded=1;whiteSpace=wrap;fillColor=none;strokeColor=#FF6600;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="820" y="70" width="300" height="400" as="geometry"/>
         </mxCell>
-
-        <!-- OpenSearch -->
+        <mxCell id="ecs_rag_label" value="ECS Fargate (RAG Orchestrator)" style="text;fontStyle=3;fontSize=12;fontColor=#FF6600;align=center;" vertex="1" parent="1">
+          <mxGeometry x="820" y="75" width="300" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="li_retriever" value="LlamaIndex Retriever&#xa;(OpensearchVectorStore&#xa;+ MetadataFilters)" style="rounded=1;whiteSpace=wrap;fillColor=#DAEEF3;strokeColor=#2E75B6;fontStyle=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="840" y="110" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="li_postproc" value="NodePostprocessors&#xa;(authority rank, freshness,&#xa;auth filtering)" style="rounded=1;whiteSpace=wrap;fillColor=#DAEEF3;strokeColor=#2E75B6;fontStyle=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="840" y="175" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="li_prompt" value="PromptTemplate&#xa;(grounding rules, citations,&#xa;refusal rules)" style="rounded=1;whiteSpace=wrap;fillColor=#DAEEF3;strokeColor=#2E75B6;fontStyle=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="840" y="240" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="li_llm" value="Bedrock LLM Class&#xa;(answer generation)" style="rounded=1;whiteSpace=wrap;fillColor=#DAEEF3;strokeColor=#2E75B6;fontStyle=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="840" y="305" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="custom_rag" value="Custom: identity mapping, rate limiting,&#xa;audit logging, confidence scoring, Slack posting" style="rounded=1;whiteSpace=wrap;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=0;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="840" y="370" width="260" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="lbl_llamaindex_rag" value="LlamaIndex" style="text;fontStyle=2;fontSize=10;fontColor=#2E75B6;align=right;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="110" width="80" height="20" as="geometry"/>
+        </mxCell>
         <mxCell id="opensearch" value="OpenSearch&#xa;(Hybrid Search)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elasticsearch_service;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#009900;" vertex="1" parent="1">
-          <mxGeometry x="940" y="160" width="60" height="60" as="geometry"/>
+          <mxGeometry x="1220" y="100" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- RDS PostgreSQL -->
         <mxCell id="rds" value="RDS PostgreSQL&#xa;(Metadata + Audit)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.rds;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#009900;" vertex="1" parent="1">
-          <mxGeometry x="940" y="290" width="60" height="60" as="geometry"/>
+          <mxGeometry x="1220" y="260" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- Amazon Bedrock -->
         <mxCell id="bedrock" value="Amazon Bedrock&#xa;(Embeddings + LLM)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.sagemaker;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#009900;" vertex="1" parent="1">
-          <mxGeometry x="940" y="420" width="60" height="60" as="geometry"/>
+          <mxGeometry x="1220" y="420" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- Slack API response -->
+        <mxCell id="s3" value="S3&#xa;(Snapshots)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#009900;" vertex="1" parent="1">
+          <mxGeometry x="1220" y="560" width="60" height="60" as="geometry"/>
+        </mxCell>
         <mxCell id="slack_resp" value="Slack API&#xa;(Response)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.general;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#E6F2FF;strokeColor=#0066CC;" vertex="1" parent="1">
-          <mxGeometry x="940" y="550" width="60" height="60" as="geometry"/>
+          <mxGeometry x="1420" y="370" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- ===== INGESTION PATH ===== -->
-
-        <!-- EventBridge -->
         <mxCell id="eventbridge" value="EventBridge&#xa;(Schedules)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#FFF9E6;strokeColor=#CC9900;" vertex="1" parent="1">
-          <mxGeometry x="220" y="680" width="60" height="60" as="geometry"/>
+          <mxGeometry x="60" y="600" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- ECS Connector Workers -->
-        <mxCell id="ecs_connectors" value="ECS Fargate&#xa;(Connector Workers)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#FFF9E6;strokeColor=#CC9900;" vertex="1" parent="1">
-          <mxGeometry x="540" y="680" width="60" height="60" as="geometry"/>
+        <mxCell id="ecs_conn_container" value="" style="rounded=1;whiteSpace=wrap;fillColor=none;strokeColor=#CC9900;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="240" y="560" width="300" height="310" as="geometry"/>
         </mxCell>
-
-        <!-- Sources cluster -->
+        <mxCell id="ecs_conn_label" value="ECS Fargate (Connector Workers)" style="text;fontStyle=3;fontSize=12;fontColor=#CC9900;align=center;" vertex="1" parent="1">
+          <mxGeometry x="240" y="565" width="300" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="li_readers" value="LlamaIndex Readers&#xa;(ConfluenceReader, SlackReader,&#xa;JiraReader, GithubReader,&#xa;WebReader, custom BaseReader)" style="rounded=1;whiteSpace=wrap;fillColor=#DAEEF3;strokeColor=#2E75B6;fontStyle=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="260" y="600" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="li_pipeline" value="LlamaIndex IngestionPipeline&#xa;(NodeParser + BedrockEmbedding&#xa;+ OpensearchVectorStore&#xa;+ content-hash dedup)" style="rounded=1;whiteSpace=wrap;fillColor=#DAEEF3;strokeColor=#2E75B6;fontStyle=0;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="260" y="680" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="custom_conn" value="Custom: S3 snapshots (boto3),&#xa;PostgreSQL metadata upsert,&#xa;connector self-management" style="rounded=1;whiteSpace=wrap;fillColor=#FFF2CC;strokeColor=#D6B656;fontStyle=0;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="260" y="760" width="200" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="lbl_llamaindex_conn" value="LlamaIndex" style="text;fontStyle=2;fontSize=10;fontColor=#2E75B6;align=right;" vertex="1" parent="1">
+          <mxGeometry x="470" y="600" width="70" height="20" as="geometry"/>
+        </mxCell>
         <mxCell id="src_confluence" value="Confluence" style="rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=0;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="760" y="620" width="90" height="30" as="geometry"/>
+          <mxGeometry x="640" y="580" width="100" height="28" as="geometry"/>
         </mxCell>
         <mxCell id="src_slack" value="Slack (public)" style="rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=0;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="760" y="660" width="90" height="30" as="geometry"/>
+          <mxGeometry x="640" y="620" width="100" height="28" as="geometry"/>
         </mxCell>
         <mxCell id="src_jira" value="Jira" style="rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=0;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="760" y="700" width="90" height="30" as="geometry"/>
+          <mxGeometry x="640" y="660" width="100" height="28" as="geometry"/>
         </mxCell>
         <mxCell id="src_github" value="GitHub" style="rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=0;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="760" y="740" width="90" height="30" as="geometry"/>
+          <mxGeometry x="780" y="580" width="100" height="28" as="geometry"/>
         </mxCell>
         <mxCell id="src_intranet" value="Intranet" style="rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=0;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="760" y="780" width="90" height="30" as="geometry"/>
+          <mxGeometry x="780" y="620" width="100" height="28" as="geometry"/>
         </mxCell>
         <mxCell id="src_powerdms" value="PowerDMS" style="rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#666666;fontStyle=0;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="760" y="820" width="90" height="30" as="geometry"/>
+          <mxGeometry x="780" y="660" width="100" height="28" as="geometry"/>
         </mxCell>
-
-        <!-- S3 snapshot store -->
-        <mxCell id="s3" value="S3&#xa;(Snapshots)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#E6FFE6;strokeColor=#009900;" vertex="1" parent="1">
-          <mxGeometry x="940" y="700" width="60" height="60" as="geometry"/>
-        </mxCell>
-
-        <!-- ===== IDENTITY SYNC PATH ===== -->
-
-        <!-- EventBridge Identity -->
         <mxCell id="eb_identity" value="EventBridge&#xa;(every 15 min)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#F5E6FF;strokeColor=#6600CC;" vertex="1" parent="1">
-          <mxGeometry x="60" y="680" width="60" height="60" as="geometry"/>
+          <mxGeometry x="60" y="980" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- ECS Identity Sync -->
         <mxCell id="ecs_identity" value="ECS Fargate&#xa;(Identity Sync)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;labelBackgroundColor=none;sketch=0;fontStyle=1;fontSize=11;fillColor=#F5E6FF;strokeColor=#6600CC;" vertex="1" parent="1">
-          <mxGeometry x="220" y="800" width="60" height="60" as="geometry"/>
+          <mxGeometry x="320" y="980" width="60" height="60" as="geometry"/>
         </mxCell>
-
-        <!-- ===== LABELS ===== -->
-        <mxCell id="lbl_query" value="Query Path" style="text;fontStyle=3;fontSize=12;fontColor=#0066CC;align=left;" vertex="1" parent="1">
-          <mxGeometry x="60" y="300" width="120" height="30" as="geometry"/>
+        <mxCell id="legend_box" value="" style="rounded=1;whiteSpace=wrap;fillColor=none;strokeColor=#999999;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="560" width="200" height="100" as="geometry"/>
         </mxCell>
-        <mxCell id="lbl_ingest" value="Ingestion Path" style="text;fontStyle=3;fontSize=12;fontColor=#CC9900;align=left;" vertex="1" parent="1">
-          <mxGeometry x="220" y="645" width="140" height="30" as="geometry"/>
+        <mxCell id="legend_title" value="Legend" style="text;fontStyle=3;fontSize=11;fontColor=#666666;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="565" width="60" height="20" as="geometry"/>
         </mxCell>
-        <mxCell id="lbl_identity" value="Identity Sync" style="text;fontStyle=3;fontSize=12;fontColor=#6600CC;align=left;" vertex="1" parent="1">
-          <mxGeometry x="60" y="645" width="120" height="30" as="geometry"/>
+        <mxCell id="legend_li" value="" style="rounded=1;fillColor=#DAEEF3;strokeColor=#2E75B6;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="590" width="16" height="16" as="geometry"/>
         </mxCell>
-
-        <!-- ===== QUERY PATH EDGES ===== -->
+        <mxCell id="legend_li_text" value="LlamaIndex component" style="text;fontSize=10;fontColor=#666666;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1385" y="588" width="140" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_custom" value="" style="rounded=1;fillColor=#FFF2CC;strokeColor=#D6B656;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="615" width="16" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_custom_text" value="Custom code" style="text;fontSize=10;fontColor=#666666;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1385" y="613" width="140" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_aws" value="" style="rounded=1;fillColor=#E6FFE6;strokeColor=#009900;" vertex="1" parent="1">
+          <mxGeometry x="1360" y="640" width="16" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend_aws_text" value="AWS managed service" style="text;fontSize=10;fontColor=#666666;align=left;" vertex="1" parent="1">
+          <mxGeometry x="1385" y="638" width="140" height="20" as="geometry"/>
+        </mxCell>
         <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#0066CC;" edge="1" source="slack_user" target="apigw" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
@@ -122,68 +145,121 @@
         <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#FF6600;" edge="1" source="lambda" target="sqs" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#FF6600;" edge="1" source="sqs" target="ecs_rag" parent="1">
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#FF6600;" edge="1" source="sqs" target="li_retriever" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="760" y="130"/>
+              <mxPoint x="760" y="135"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_rag1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#2E75B6;" edge="1" source="li_retriever" target="li_postproc" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_rag" target="opensearch" parent="1">
+        <mxCell id="e_rag2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#2E75B6;" edge="1" source="li_postproc" target="li_prompt" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_rag" target="rds" parent="1">
+        <mxCell id="e_rag3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#2E75B6;" edge="1" source="li_prompt" target="li_llm" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_rag" target="bedrock" parent="1">
+        <mxCell id="e5" value="hybrid search" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" edge="1" source="li_retriever" target="opensearch" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e8" value="post answer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#0066CC;dashed=1;exitX=1;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_rag" target="slack_resp" parent="1">
+        <mxCell id="e6" value="audit log" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;" edge="1" source="custom_rag" target="rds" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-
-        <!-- ===== INGESTION PATH EDGES ===== -->
-        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;" edge="1" source="eventbridge" target="ecs_connectors" parent="1">
+        <mxCell id="e7" value="embed + generate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" edge="1" source="li_llm" target="bedrock" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1160" y="330"/>
+              <mxPoint x="1160" y="450"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="post answer" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#0066CC;dashed=1;" edge="1" source="custom_rag" target="slack_resp" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_connectors" target="src_confluence" parent="1">
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;" edge="1" source="eventbridge" target="li_readers" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_connectors" target="src_slack" parent="1">
+        <mxCell id="e_ing1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#2E75B6;" edge="1" source="li_readers" target="li_pipeline" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_connectors" target="src_jira" parent="1">
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#CC9900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" edge="1" source="li_readers" target="src_confluence" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_connectors" target="src_github" parent="1">
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#CC9900;" edge="1" source="li_readers" target="src_slack" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_connectors" target="src_intranet" parent="1">
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#CC9900;" edge="1" source="li_readers" target="src_jira" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#CC9900;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" source="ecs_connectors" target="src_powerdms" parent="1">
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#CC9900;" edge="1" source="li_readers" target="src_github" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e16" value="index" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="ecs_connectors" target="opensearch" parent="1">
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#CC9900;" edge="1" source="li_readers" target="src_intranet" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e17" value="metadata" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="ecs_connectors" target="rds" parent="1">
+        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#CC9900;" edge="1" source="li_readers" target="src_powerdms" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="e18" value="snapshot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="ecs_connectors" target="s3" parent="1">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="e16" value="index" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="li_pipeline" target="opensearch" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="360" y="500"/>
+              <mxPoint x="1150" y="500"/>
+              <mxPoint x="1150" y="130"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e19" value="embed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="ecs_connectors" target="bedrock" parent="1">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="e17" value="metadata" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="custom_conn" target="rds" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="360" y="830"/>
+              <mxPoint x="1180" y="830"/>
+              <mxPoint x="1180" y="290"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-
-        <!-- ===== IDENTITY SYNC EDGES ===== -->
+        <mxCell id="e18" value="embed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="li_pipeline" target="bedrock" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="360" y="480"/>
+              <mxPoint x="1120" y="480"/>
+              <mxPoint x="1120" y="450"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e19" value="snapshot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#009900;dashed=1;" edge="1" source="custom_conn" target="s3" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="360" y="850"/>
+              <mxPoint x="1150" y="850"/>
+              <mxPoint x="1150" y="590"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
         <mxCell id="e20" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6600CC;" edge="1" source="eb_identity" target="ecs_identity" parent="1">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
         <mxCell id="e21" value="sync users" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6600CC;dashed=1;" edge="1" source="ecs_identity" target="rds" parent="1">
-          <mxGeometry relative="1" as="geometry"/>
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="350" y="900"/>
+              <mxPoint x="1300" y="900"/>
+              <mxPoint x="1300" y="290"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e22" value="Slack API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6600CC;dashed=1;" edge="1" source="ecs_identity" target="slack_user" parent="1">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="e22" value="Slack API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#6600CC;dashed=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" edge="1" source="ecs_identity" target="slack_user" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="350" y="960"/>
+              <mxPoint x="20" y="960"/>
+              <mxPoint x="20" y="130"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-
       </root>
     </mxGraphModel>
   </diagram>
