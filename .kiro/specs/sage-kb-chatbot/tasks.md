@@ -92,6 +92,14 @@
 - [ ] Create dead-letter queue (DLQ) with `max_receive_count` of 3
 - [ ] Configure visibility timeout aligned with RAG processing SLA (~30s)
 - [ ] Enable SSE-SQS or SSE-KMS encryption
+- [ ] Create DLQ notification Lambda (`lambda/dlq_notifier/handler.py`):
+  - Triggered by SQS DLQ (event source mapping)
+  - Parse original message (user_id, channel_id, thread_ts)
+  - Send a "Sorry, I wasn't able to process your question. Please try again later." Slack message to the user in the original channel/thread
+  - Log the failure details (query text, error context) for operator review
+  - Grant Lambda read access to Slack bot token in Secrets Manager and `sqs:ReceiveMessage/DeleteMessage` on the DLQ
+- [ ] Create `constructs/dlq_notifier.py` CDK construct wrapping the Lambda and SQS event source mapping
+- [ ] Write unit tests `tests/test_dlq_notifier.py` for message parsing, Slack notification, and error logging
 - [ ] Write fine-grained assertions test `tests/test_query_queue.py`
 
 **References**: requirements.md §7.1, §8.1, §17; design.md §Component 2

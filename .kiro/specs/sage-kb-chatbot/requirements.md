@@ -820,6 +820,7 @@ Implementation requirements:
 - The main Amazon ECS on Fargate chatbot service must maintain at least 1–2 warm tasks in production
 - Ingestion workers may be run on-demand and are allowed to cold start
 - Async handoff is implemented using Amazon SQS
+- Messages that fail processing after max retries (3) are moved to a dead-letter queue (DLQ). A DLQ notification Lambda shall be triggered by the DLQ to send a final failure message to the user in Slack, ensuring users are not left waiting indefinitely for a response that will never arrive.
 
 ---
 

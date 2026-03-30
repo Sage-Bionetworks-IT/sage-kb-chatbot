@@ -591,8 +591,8 @@ erDiagram
 ### Error Scenario 2: SQS Message Processing Failure
 
 **Condition**: The ECS Fargate RAG orchestrator fails to process a query message (Bedrock timeout, OpenSearch unavailable, unhandled exception).
-**Response**: SQS visibility timeout expires and the message is retried. After max retries, the message moves to the dead-letter queue (DLQ).
-**Recovery**: DLQ messages trigger a CloudWatch alarm. Operators can inspect and replay DLQ messages. The user receives a graceful "I'm having trouble right now, please try again" message in Slack if the initial attempt fails.
+**Response**: SQS visibility timeout expires and the message is retried. After max retries, the message moves to the dead-letter queue (DLQ). A DLQ notification Lambda is triggered by the DLQ, which sends a final "Sorry, I wasn't able to process your question. Please try again later." Slack message to the user in the original channel/thread, ensuring the user is not left waiting indefinitely.
+**Recovery**: DLQ messages trigger a CloudWatch alarm. The DLQ notification Lambda notifies the user automatically. Operators can inspect and replay DLQ messages. The user also receives a graceful "I'm having trouble right now, please try again" message in Slack on the initial failure attempt.
 
 ### Error Scenario 3: Rate Limit Exceeded
 
