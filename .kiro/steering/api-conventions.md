@@ -1,5 +1,6 @@
 ---
 inclusion: auto
+description: API design conventions for endpoints, responses, and pagination
 ---
 
 # API Conventions

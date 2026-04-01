@@ -3,29 +3,35 @@
 ci:
   autoupdate_schedule: monthly
 
+default_language_version:
+  python: python3
+
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.1.0
+    hooks:
+      - id: black
+  - repo: https://github.com/python-poetry/poetry
+    rev: '2.3.2'
+    hooks:
+      - id: poetry-check
+      - id: poetry-lock
   - repo: https://github.com/sirosen/check-jsonschema
-    rev: 0.37.0
+    rev: 0.36.1
     hooks:
       - id: check-github-workflows
       - id: check-github-actions
-  - repo: https://github.com/awslabs/git-secrets
-    rev: b9e96b3212fa06aea65964ff0d5cda84ce935f38
-    hooks:
-      - id: git-secrets
-        entry: git-secrets
-        args: [--scan, --recursive]
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v2.4.0
-    hooks:
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-      - id: check-ast
-  - repo: https://github.com/adrienverge/yamllint
-    rev: v1.19.0
-    hooks:
-      - id: yamllint
-  - repo: https://github.com/Lucas-C/pre-commit-hooks
-    rev: v1.1.7
-    hooks:
-      - id: remove-tabs
