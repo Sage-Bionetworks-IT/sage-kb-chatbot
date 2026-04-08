@@ -30,7 +30,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 15.1, 15.2**
 
-  - [ ] 1.4 Implement input sanitization utilities (GREEN)
+  - [x] 1.4 Implement input sanitization utilities (GREEN)
     - Create `src/slack_agent_router/sanitize.py`
     - Implement `strip_slack_formatting(text: str) -> str` to remove Slack mrkdwn markup (bold, italic, strikethrough, links, user/channel mentions, code blocks, emoji shortcodes) and return plain text
     - Implement `sanitize_backend_response(content: str) -> str` to neutralize dangerous content before posting to Slack
