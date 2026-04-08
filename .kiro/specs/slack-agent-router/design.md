@@ -842,3 +842,110 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 - Atlassian Rovo MCP Server (`mcp.atlassian.com`) — Search and summarize Confluence/Jira content via MCP protocol
 - Vertex AI Search API — Managed search over Google Sites content
 - Google Cloud Platform — Service account auth, Vertex AI Search hosting
+
+
+## Correctness Properties
+
+*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do.*
+
+### Property 1: Event deduplication prevents reprocessing
+
+*For any* event ID (event_id, envelope_id, or trigger_id) submitted to the deduplication cache, checking the same ID again within the 60-second TTL window SHALL return "duplicate" and the event SHALL be skipped, while any previously unseen ID SHALL be accepted for processing.
+
+**Validates: Requirements 1.5, 1.6**
+
+### Property 2: Bot mention prefix stripping
+
+*For any* app_mention event text containing a bot mention prefix (e.g., `<@BOT_ID>`), the extracted question text SHALL not contain the bot mention prefix and SHALL preserve the remainder of the message text unchanged.
+
+**Validates: Requirement 1.1**
+
+### Property 3: Per-user rate limit window enforcement
+
+*For any* user and any rate limit window (5/minute, 30/hour, 100/day), if the user has made N requests equal to the window limit within the window period, the next request SHALL be rejected with a non-empty reason string identifying the exceeded limit.
+
+**Validates: Requirements 3.1, 3.2, 3.3, 3.6**
+
+### Property 4: Per-user in-flight concurrency limit
+
+*For any* user, if a request is currently in-flight (acquired but not released), a subsequent request from the same user SHALL be rejected. After the in-flight request is released, the next request SHALL be accepted.
+
+**Validates: Requirement 3.4**
+
+### Property 5: Global rate limit enforcement
+
+*For any* set of users, if the total number of requests across all users within a one-minute window reaches 50, the next request from any user SHALL be rejected.
+
+**Validates: Requirement 3.5**
+
+### Property 6: Return control loop iteration bound
+
+*For any* sequence of return control responses from the Bedrock Agent, the orchestrator SHALL execute at most 5 iterations of the return control loop before terminating, regardless of whether the agent continues requesting tool calls.
+
+**Validates: Requirement 5.3**
+
+### Property 7: Return control loop duplicate tool call detection
+
+*For any* sequence of tool invocation requests within a single return control loop, if the same (action_group, parameters) pair is requested more than once, the duplicate request SHALL be skipped and the previously cached result SHALL be used.
+
+**Validates: Requirement 5.5**
+
+### Property 8: Action group to backend mapping correctness
+
+*For any* valid action group name returned by the Bedrock Agent, the orchestrator SHALL dispatch to the correct backend implementation: SearchConfluenceJira maps to Rovo_Backend and SearchGoogleSites maps to Vertex_Backend.
+
+**Validates: Requirement 5.7**
+
+### Property 9: Session ID derivation from Slack thread context
+
+*For any* ParsedQuestion, the derived session_id SHALL follow the format "{channel_id}:{thread_ts}" when thread_ts is present, or "{channel_id}:{message_ts}" when thread_ts is absent, ensuring all messages in the same thread share a Bedrock Agent session.
+
+**Validates: Requirements 6.1, 6.2, 6.3**
+
+### Property 10: Rovo MCP response parsing completeness
+
+*For any* valid MCP response from the Rovo MCP Server, the Rovo_Backend SHALL produce a BackendResult where success is True, answer contains the extracted text content, and source_urls contains all document links from the MCP response.
+
+**Validates: Requirement 7.2**
+
+### Property 11: Vertex AI Search response parsing completeness
+
+*For any* valid Vertex AI Search API response, the Vertex_Backend SHALL produce a BackendResult where success is True, answer contains the extracted text and AI summary, and source_urls contains all document links from the response.
+
+**Validates: Requirement 8.2**
+
+### Property 12: Answer formatting includes all required components
+
+*For any* AgentResponse with non-empty answer text and source URLs, the formatted Slack mrkdwn string SHALL contain the answer text, every source URL as a numbered link with its system label, and a latency footer showing elapsed time.
+
+**Validates: Requirement 9.1**
+
+### Property 13: Partial failure fallback includes all successful tool outputs
+
+*For any* set of successful ToolOutputs collected before a Bedrock Agent failure, the fallback response SHALL include the content and source links from every successful ToolOutput, ensuring no successfully retrieved information is lost.
+
+**Validates: Requirement 10.7**
+
+### Property 14: Audit log structure and completeness
+
+*For any* QueryAuditRecord, the emitted log entry SHALL be valid JSON containing all required fields: request_id, user_id, channel_id, question, backends_queried, backends_succeeded, backends_failed, answer_length, total_latency_ms, backend_latencies_ms, and timestamp.
+
+**Validates: Requirements 12.1, 12.2, 12.4**
+
+### Property 15: No secrets in log output
+
+*For any* log entry emitted by the Audit_Logger, the output SHALL not contain API tokens, secrets, credentials, or full backend response bodies, even if such values are present in the input data being logged.
+
+**Validates: Requirement 12.6**
+
+### Property 16: Slack formatting markup stripping
+
+*For any* Slack-formatted message text containing markup (bold, italic, strikethrough, links, user mentions, channel mentions, code blocks, or emoji shortcodes), the stripping function SHALL remove all markup syntax and return plain text preserving the readable content.
+
+**Validates: Requirement 15.1**
+
+### Property 17: Backend response content sanitization
+
+*For any* backend response content string, the sanitization function SHALL neutralize potentially dangerous content (e.g., Slack mrkdwn injection, excessive formatting) before the content is posted to Slack.
+
+**Validates: Requirement 15.2**
