@@ -37,13 +37,13 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run property tests from 1.3 — all must pass
     - _Requirements: 15.1, 15.2_
 
-  - [ ] 1.5 Write property tests for answer formatting (RED)
+  - [x] 1.5 Write property tests for answer formatting (RED)
     - **Property 12: Answer formatting includes all required components** — for any AgentResponse with non-empty answer and sources, the formatted string contains the answer, every source URL as a numbered link, and a latency footer
     - **Property 13: Partial failure fallback includes all successful tool outputs** — for any set of successful ToolOutputs, the fallback response includes content and source links from every one
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 9.1, 10.7**
 
-  - [ ] 1.6 Implement answer formatting utility (GREEN)
+  - [x] 1.6 Implement answer formatting utility (GREEN)
     - Create `src/slack_agent_router/formatter.py`
     - Implement `format_answer(response: AgentResponse, elapsed_seconds: float) -> str` that produces Slack mrkdwn with answer text, numbered source links with system labels, and latency footer
     - Implement `format_fallback_answer(tool_outputs: list[ToolOutput]) -> str` for partial failure fallback
