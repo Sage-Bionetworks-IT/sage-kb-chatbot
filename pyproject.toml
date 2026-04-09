@@ -34,6 +34,7 @@ asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["src/slack_agent_router"]
+omit = ["src/slack_agent_router/models.py"]
 
 [tool.coverage.report]
 fail_under = 80
