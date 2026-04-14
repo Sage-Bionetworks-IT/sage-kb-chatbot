@@ -13,7 +13,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Create `Dockerfile` for the ECS Fargate container
     - _Requirements: 14.1_
 
-  - [ ] 1.2 Implement data models (ParsedQuestion, BackendResult, ToolOutput, AgentResponse, BackendConfig, RateLimitConfig, QueryAuditRecord)
+  - [x] 1.2 Implement data models (ParsedQuestion, BackendResult, ToolOutput, AgentResponse, BackendConfig, RateLimitConfig, QueryAuditRecord)
     - Create `src/slack_agent_router/models.py` with all frozen dataclasses
     - ParsedQuestion: event_type, user_id, channel_id, thread_ts, question, team_id, event_ts, request_id
     - BackendResult: backend_name, success, answer, source_urls, error_message, latency_ms
