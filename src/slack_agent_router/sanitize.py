@@ -10,19 +10,18 @@ import re
 
 
 def strip_slack_formatting(text: str) -> str:
-    """Remove Slack mrkdwn markup and return plain text.
+    """Remove Slack-specific syntax from user input.
 
-    Strips: bold, italic, strikethrough, inline code, code blocks,
-    links, user/channel mentions, and emoji shortcodes.
+    Strips Slack-specific constructs (link syntax, mentions,
+    emoji shortcodes) but preserves standard markdown formatting
+    (bold, italic, strikethrough, code) since models handle
+    markdown well and the semantic emphasis is useful.
     """
-    # Code blocks (``` ... ```) — extract inner content
-    text = re.sub(r"```\n?(.*?)\n?```", r"\1", text, flags=re.DOTALL)
-
-    # Inline code
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-
     # Links: <url|label> → label
     text = re.sub(r"<[^|>]+\|([^>]+)>", r"\1", text)
+
+    # Bare URLs: <https://example.com> → https://example.com
+    text = re.sub(r"<(https?://[^>]+)>", r"\1", text)
 
     # User mentions: <@U12345678>
     text = re.sub(r"<@[^>]+>", "", text)
@@ -32,15 +31,6 @@ def strip_slack_formatting(text: str) -> str:
 
     # Special mentions: <!channel>, <!here>, <!everyone>
     text = re.sub(r"<![^>]+>", "", text)
-
-    # Bold: *text*
-    text = re.sub(r"\*([^*]+)\*", r"\1", text)
-
-    # Italic: _text_
-    text = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"\1", text)
-
-    # Strikethrough: ~text~
-    text = re.sub(r"~([^~]+)~", r"\1", text)
 
     # Emoji shortcodes: :name:
     text = re.sub(r":[a-z0-9_+-]+:", "", text)
