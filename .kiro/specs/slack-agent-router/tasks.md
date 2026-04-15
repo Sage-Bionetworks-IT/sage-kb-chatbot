@@ -7,12 +7,11 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
 ## Tasks
 
 - [ ] 1. Set up project structure, data models, and shared utilities
-  - [ ] 1.1 Create project directory structure and configuration files
+  - [x] 1.1 Create project directory structure and configuration files
     - Create `src/slack_agent_router/` package with `__init__.py`
     - Create `pyproject.toml` with dependencies: slack-bolt, slack-sdk, httpx, aiohttp, mcp, google-cloud-discoveryengine, google-auth, pydantic, boto3, hypothesis, pytest, pytest-asyncio
     - Create `Dockerfile` for the ECS Fargate container
     - _Requirements: 14.1_
-
   - [ ] 1.2 Implement data models (ParsedQuestion, BackendResult, ToolOutput, AgentResponse, BackendConfig, RateLimitConfig, QueryAuditRecord)
     - Create `src/slack_agent_router/models.py` with all frozen dataclasses
     - ParsedQuestion: event_type, user_id, channel_id, thread_ts, question, team_id, event_ts, request_id
