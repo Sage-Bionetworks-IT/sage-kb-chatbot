@@ -104,9 +104,8 @@ class TestAnswerFormatting:
     @given(data=agent_response_with_sources())
     def test_contains_latency_footer(self, data):
         response, _ = data
-        elapsed = response.latency_ms / 1000
-        result = format_answer(response, elapsed)
-        assert f"{elapsed:.1f}s" in result
+        result = format_answer(response, response.latency_ms / 1000)
+        assert f"{response.latency_ms / 1000:.1f}s" in result
 
     @given(data=agent_response_with_sources())
     def test_sources_header_present(self, data):
