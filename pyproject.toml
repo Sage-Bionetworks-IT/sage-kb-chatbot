@@ -28,6 +28,9 @@ dev = [
     "pytest-mock>=3.14,<4",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/slack_agent_router"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
