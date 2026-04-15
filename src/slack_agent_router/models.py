@@ -24,7 +24,7 @@ class ParsedQuestion:
 
 @dataclass(frozen=True)
 class BackendResult:
-    """Internal result from a backend query. Not sent to Bedrock directly."""
+    """Internal result from a backend query."""
 
     backend_name: str
     success: bool
@@ -36,11 +36,7 @@ class BackendResult:
 
 @dataclass(frozen=True)
 class ToolOutput:
-    """Structured output from a backend tool execution.
-
-    Serialized to JSON and sent back to the Bedrock Agent
-    via returnControlInvocationResults.
-    """
+    """Structured output from a backend tool execution."""
 
     success: bool
     content: str
