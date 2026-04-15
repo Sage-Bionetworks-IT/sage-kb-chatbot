@@ -35,10 +35,7 @@ def format_fallback_answer(
     Used when the Bedrock Agent fails after successful backend
     calls. Concatenates content and sources from each output.
     """
-    prefix = (
-        "I had trouble synthesizing a complete answer, "
-        "but here's what I found from each source:"
-    )
+    prefix = "I had trouble synthesizing a complete answer, " "but here's what I found from each source:"
 
     if not tool_outputs:
         return prefix
