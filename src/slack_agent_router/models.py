@@ -72,7 +72,7 @@ class RateLimitConfig:
     per_user_per_hour: int = 30
     per_user_per_day: int = 100
     per_user_in_flight: int = 1
-    global_per_minute: int = 50
+    global_per_minute: int = 500
 
 
 @dataclass(frozen=True)

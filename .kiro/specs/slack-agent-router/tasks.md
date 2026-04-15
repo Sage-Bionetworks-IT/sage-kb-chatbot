@@ -68,14 +68,14 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6_
 
 - [ ] 3. Implement rate limiter
-  - [ ] 3.1 Write property tests for rate limiter (RED)
+  - [x] 3.1 Write property tests for rate limiter (RED)
     - **Property 3: Per-user rate limit window enforcement** — for any user at the window limit, the next request is rejected with a non-empty reason
     - **Property 4: Per-user in-flight concurrency limit** — if a request is in-flight, subsequent requests are rejected; after release, next request is accepted
     - **Property 5: Global rate limit enforcement** — when total requests across all users reach 50/min, the next request is rejected
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6**
 
-  - [ ] 3.2 Implement RateLimiter with sliding window counters (GREEN)
+  - [x] 3.2 Implement RateLimiter with sliding window counters (GREEN)
     - Create `src/slack_agent_router/rate_limiter.py`
     - Implement sliding window counters for per-user per-minute (5), per-hour (30), per-day (100) limits
     - Implement per-user in-flight concurrency limit (1)
