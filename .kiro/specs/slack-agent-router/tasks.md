@@ -24,13 +24,13 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - QueryAuditRecord: all audit fields as defined in design
     - _Requirements: 9.1, 12.4_
 
-  - [ ] 1.3 Write property tests for input sanitization (RED)
+  - [x] 1.3 Write property tests for input sanitization (RED)
     - **Property 16: Slack formatting markup stripping** — for any Slack-formatted text, stripping removes all markup and preserves readable content
     - **Property 17: Backend response content sanitization** — for any backend response, sanitization neutralizes dangerous content
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 15.1, 15.2**
 
-  - [ ] 1.4 Implement input sanitization utilities (GREEN)
+  - [x] 1.4 Implement input sanitization utilities (GREEN)
     - Create `src/slack_agent_router/sanitize.py`
     - Implement `strip_slack_formatting(text: str) -> str` to remove Slack mrkdwn markup (bold, italic, strikethrough, links, user/channel mentions, code blocks, emoji shortcodes) and return plain text
     - Implement `sanitize_backend_response(content: str) -> str` to neutralize dangerous content before posting to Slack

@@ -64,4 +64,4 @@ coverage.xml
 cdk.out/
 
 # Hypothesis
-.hypothesis
+.hypothesis/
