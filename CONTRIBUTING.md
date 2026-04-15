@@ -8,9 +8,6 @@
 ## Setup
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
 # Clone and set up the project
 git clone <repo-url>
 cd sage-kb-chatbot
