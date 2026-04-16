@@ -80,7 +80,9 @@ class TestPerUserRateLimitWindows:
     @settings(max_examples=20)
     def test_per_day_limit_rejects_at_threshold(self, uid: str) -> None:
         """After 100 requests in a day, the 101st is rejected."""
-        config = RateLimitConfig(per_user_per_minute=1000, per_user_per_hour=1000, per_user_per_day=100)
+        config = RateLimitConfig(
+            per_user_per_minute=1000, per_user_per_hour=1000, per_user_per_day=100, global_per_minute=10000
+        )
         limiter = RateLimiter(config)
         for _ in range(100):
             allowed, reason = limiter.check(uid)
