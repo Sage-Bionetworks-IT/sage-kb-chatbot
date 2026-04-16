@@ -116,6 +116,7 @@ class TestAuditLogStructure:
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_log_is_valid_json(self, record, caplog):
         """The emitted log entry must be parseable as JSON."""
+        caplog.clear()
         logger = AuditLogger()
         with caplog.at_level(logging.DEBUG):
             logger.log_answer_posted(record)
@@ -134,6 +135,7 @@ class TestAuditLogStructure:
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_log_contains_all_required_fields(self, record, caplog):
         """The JSON log must include every required audit field."""
+        caplog.clear()
         logger = AuditLogger()
         with caplog.at_level(logging.DEBUG):
             logger.log_answer_posted(record)
@@ -283,6 +285,7 @@ class TestNoSecretsInLogs:
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_audit_log_excludes_secrets_in_question(self, record, secret, caplog):
         """Secrets embedded in question text must not appear in log output."""
+        caplog.clear()
         poisoned = QueryAuditRecord(
             request_id=record.request_id,
             user_id=record.user_id,
@@ -310,6 +313,7 @@ class TestNoSecretsInLogs:
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_question_received_excludes_secrets(self, secret, caplog):
         """Secrets in question text must not appear in log_question_received output."""
+        caplog.clear()
         logger = AuditLogger()
         with caplog.at_level(logging.DEBUG):
             logger.log_question_received("req-001", "U123", f"Token: {secret}")
@@ -321,6 +325,7 @@ class TestNoSecretsInLogs:
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_error_log_excludes_secrets(self, secret, caplog):
         """Secrets in exception messages must not appear in log_error output."""
+        caplog.clear()
         logger = AuditLogger()
         with caplog.at_level(logging.DEBUG):
             logger.log_error("req-001", "backend", RuntimeError(f"Auth failed: {secret}"))
@@ -332,6 +337,7 @@ class TestNoSecretsInLogs:
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_rate_limited_log_excludes_secrets(self, secret, caplog):
         """Secrets in reason strings must not appear in log_rate_limited output."""
+        caplog.clear()
         logger = AuditLogger()
         with caplog.at_level(logging.DEBUG):
             logger.log_rate_limited("req-001", "U123", f"Limit exceeded {secret}")

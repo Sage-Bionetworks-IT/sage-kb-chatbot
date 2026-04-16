@@ -16,8 +16,6 @@ from dataclasses import asdict
 
 from slack_agent_router.models import QueryAuditRecord
 
-logger = logging.getLogger("slack_agent_router.audit")
-
 # Patterns that indicate secrets or credentials.  Each tuple entry is
 # (compiled regex, replacement placeholder).  Order matters — longer
 # prefixes are checked first so that ``xoxb-…`` is caught before a
@@ -25,7 +23,7 @@ logger = logging.getLogger("slack_agent_router.audit")
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"xoxb-[A-Za-z0-9\-]+"), "[REDACTED_SLACK_BOT_TOKEN]"),
     (re.compile(r"xapp-[A-Za-z0-9\-]+"), "[REDACTED_SLACK_APP_TOKEN]"),
-    (re.compile(r"sk-[A-Za-z0-9_\-]+"), "[REDACTED_API_KEY]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"), "[REDACTED_API_KEY]"),
     (re.compile(r"AKIA[A-Z0-9]{16}"), "[REDACTED_AWS_KEY]"),
     (re.compile(r"Bearer\s+[A-Za-z0-9\-_.]+"), "[REDACTED_BEARER_TOKEN]"),
 )
@@ -154,7 +152,7 @@ class AuditLogger:
 
     def log_websocket_connected(self) -> None:
         """Log WebSocket connection event (INFO level)."""
-        self._logger.info(_safe_json({"event": "websocket_connected"}))
+        self._logger.info(_safe_json({"event": "websocket_connected", "request_id": "system"}))
 
     def log_websocket_disconnected(self, reason: str = "") -> None:
         """Log WebSocket disconnection event (WARNING level)."""
@@ -162,6 +160,7 @@ class AuditLogger:
             _safe_json(
                 {
                     "event": "websocket_disconnected",
+                    "request_id": "system",
                     "reason": _scrub_secrets(reason),
                 }
             )
