@@ -15,7 +15,6 @@ Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6
 """
 
 import time
-from unittest.mock import patch
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -34,6 +33,12 @@ user_id = st.text(
 distinct_user_ids = st.lists(user_id, min_size=2, max_size=10, unique=True)
 
 
+def _frozen_limiter(config: RateLimitConfig | None = None) -> RateLimiter:
+    """Create a RateLimiter with a frozen clock to avoid CI flakiness."""
+    frozen = time.monotonic()
+    return RateLimiter(config, clock=lambda: frozen)
+
+
 # -------------------------------------------------------
 # Property 3: Per-user rate limit window enforcement
 # -------------------------------------------------------
@@ -47,7 +52,7 @@ class TestPerUserRateLimitWindows:
     def test_per_minute_limit_rejects_at_threshold(self, uid: str) -> None:
         """After 5 requests in a minute, the 6th is rejected."""
         config = RateLimitConfig(per_user_per_minute=5)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for _ in range(5):
             allowed, reason = limiter.check(uid)
             assert allowed is True
@@ -64,7 +69,7 @@ class TestPerUserRateLimitWindows:
     def test_per_hour_limit_rejects_at_threshold(self, uid: str) -> None:
         """After 30 requests in an hour, the 31st is rejected."""
         config = RateLimitConfig(per_user_per_minute=100, per_user_per_hour=30)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for _ in range(30):
             allowed, reason = limiter.check(uid)
             assert allowed is True
@@ -83,7 +88,7 @@ class TestPerUserRateLimitWindows:
         config = RateLimitConfig(
             per_user_per_minute=1000, per_user_per_hour=1000, per_user_per_day=100, global_per_minute=10000
         )
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for _ in range(100):
             allowed, reason = limiter.check(uid)
             assert allowed is True
@@ -100,7 +105,7 @@ class TestPerUserRateLimitWindows:
     def test_reason_string_is_user_friendly(self, uid: str) -> None:
         """The rejection reason should be a non-empty, non-whitespace string."""
         config = RateLimitConfig(per_user_per_minute=2)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for _ in range(2):
             limiter.check(uid)
             limiter.acquire(uid)
@@ -114,25 +119,27 @@ class TestPerUserRateLimitWindows:
     @settings(max_examples=10)
     def test_requests_allowed_after_window_expires(self, uid: str) -> None:
         """After the minute window slides past, requests are allowed again."""
+        current_time = time.monotonic()
+        clock = lambda: current_time  # noqa: E731
         config = RateLimitConfig(per_user_per_minute=2)
-        limiter = RateLimiter(config)
+        limiter = RateLimiter(config, clock=clock)
         for _ in range(2):
             limiter.check(uid)
             limiter.acquire(uid)
             limiter.release(uid)
         allowed, _ = limiter.check(uid)
         assert allowed is False
-        with patch("time.time", return_value=time.time() + 61):
-            allowed, reason = limiter.check(uid)
-            assert allowed is True
-            assert reason is None
+        limiter._clock = lambda: current_time + 61
+        allowed, reason = limiter.check(uid)
+        assert allowed is True
+        assert reason is None
 
     @given(uid=user_id)
     @settings(max_examples=10)
     def test_check_is_non_destructive(self, uid: str) -> None:
         """Calling check() alone should not consume a request slot."""
         config = RateLimitConfig(per_user_per_minute=3)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for _ in range(10):
             allowed, reason = limiter.check(uid)
             assert allowed is True
@@ -152,7 +159,7 @@ class TestPerUserInFlightLimit:
     def test_rejected_while_in_flight(self, uid: str) -> None:
         """While one request is in-flight, the next is rejected."""
         config = RateLimitConfig(per_user_in_flight=1)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         allowed, _ = limiter.check(uid)
         assert allowed is True
         limiter.acquire(uid)
@@ -166,7 +173,7 @@ class TestPerUserInFlightLimit:
     def test_accepted_after_release(self, uid: str) -> None:
         """After releasing the in-flight request, the next is accepted."""
         config = RateLimitConfig(per_user_in_flight=1)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         limiter.check(uid)
         limiter.acquire(uid)
         limiter.release(uid)
@@ -179,7 +186,7 @@ class TestPerUserInFlightLimit:
     def test_acquire_release_cycle_repeatable(self, uid: str) -> None:
         """Multiple acquire/release cycles should all succeed."""
         config = RateLimitConfig(per_user_per_minute=100, per_user_in_flight=1)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for _ in range(5):
             allowed, reason = limiter.check(uid)
             assert allowed is True
@@ -192,7 +199,7 @@ class TestPerUserInFlightLimit:
     def test_in_flight_is_per_user_not_global(self, users: list[str]) -> None:
         """One user's in-flight request should not block another user."""
         config = RateLimitConfig(per_user_in_flight=1)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         limiter.check(users[0])
         limiter.acquire(users[0])
         allowed, reason = limiter.check(users[1])
@@ -216,7 +223,7 @@ class TestGlobalRateLimit:
             per_user_per_day=10000,
             global_per_minute=50,
         )
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for i in range(50):
             uid = f"U{i:011d}"
             allowed, reason = limiter.check(uid)
@@ -238,7 +245,7 @@ class TestGlobalRateLimit:
             per_user_per_day=10000,
             global_per_minute=50,
         )
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for _ in range(50):
             limiter.check(uid)
             limiter.acquire(uid)
@@ -249,13 +256,15 @@ class TestGlobalRateLimit:
 
     def test_global_limit_resets_after_window(self) -> None:
         """After the minute window slides, global limit resets."""
+        current_time = time.monotonic()
+        clock = lambda: current_time  # noqa: E731
         config = RateLimitConfig(
             per_user_per_minute=100,
             per_user_per_hour=1000,
             per_user_per_day=10000,
             global_per_minute=5,
         )
-        limiter = RateLimiter(config)
+        limiter = RateLimiter(config, clock=clock)
         for i in range(5):
             uid = f"U{i:011d}"
             limiter.check(uid)
@@ -263,10 +272,10 @@ class TestGlobalRateLimit:
             limiter.release(uid)
         allowed, _ = limiter.check("UNEWUSER0000")
         assert allowed is False
-        with patch("time.time", return_value=time.time() + 61):
-            allowed, reason = limiter.check("UNEWUSER0000")
-            assert allowed is True
-            assert reason is None
+        limiter._clock = lambda: current_time + 61
+        allowed, reason = limiter.check("UNEWUSER0000")
+        assert allowed is True
+        assert reason is None
 
     @given(users=distinct_user_ids)
     @settings(max_examples=10)
@@ -279,7 +288,7 @@ class TestGlobalRateLimit:
             per_user_per_day=10000,
             global_per_minute=global_limit,
         )
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         for uid in users:
             allowed, _ = limiter.check(uid)
             assert allowed is True
@@ -303,7 +312,7 @@ class TestRateLimiterCombined:
     def test_in_flight_checked_before_window_limits(self, uid: str) -> None:
         """In-flight limit should reject even if window limits are fine."""
         config = RateLimitConfig(per_user_per_minute=100, per_user_in_flight=1)
-        limiter = RateLimiter(config)
+        limiter = _frozen_limiter(config)
         limiter.check(uid)
         limiter.acquire(uid)
         allowed, reason = limiter.check(uid)
@@ -312,7 +321,7 @@ class TestRateLimiterCombined:
 
     def test_default_config_values(self) -> None:
         """RateLimiter with default config uses expected thresholds."""
-        limiter = RateLimiter()
+        limiter = _frozen_limiter()
         config = RateLimitConfig()
         uid = "UDEFAULT00000"
         for _ in range(config.per_user_per_minute):
@@ -327,5 +336,5 @@ class TestRateLimiterCombined:
     @settings(max_examples=10)
     def test_release_without_acquire_is_safe(self, uid: str) -> None:
         """Calling release without a prior acquire should not raise."""
-        limiter = RateLimiter()
+        limiter = _frozen_limiter()
         limiter.release(uid)

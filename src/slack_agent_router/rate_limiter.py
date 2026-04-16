@@ -10,6 +10,7 @@ Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.8
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from slack_agent_router.models import RateLimitConfig
@@ -37,11 +38,12 @@ class _UserState:
 class RateLimiter:
     """In-memory rate limiter with sliding window counters."""
 
-    def __init__(self, config: RateLimitConfig | None = None) -> None:
+    def __init__(self, config: RateLimitConfig | None = None, *, clock: Callable[[], float] | None = None) -> None:
         self._config = config or RateLimitConfig()
+        self._clock = clock or time.monotonic
         self._users: dict[str, _UserState] = {}
         self._global_minute_timestamps: list[float] = []
-        self._last_cleanup: float = time.time()
+        self._last_cleanup: float = self._clock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -54,7 +56,7 @@ class RateLimiter:
             (True, None) if allowed.
             (False, reason) if rate-limited.
         """
-        now = time.time()
+        now = self._clock()
         state = self._users.get(user_id)
 
         # In-flight check
@@ -80,7 +82,7 @@ class RateLimiter:
 
     def acquire(self, user_id: str) -> None:
         """Record that a request is being processed."""
-        now = time.time()
+        now = self._clock()
         state = self._ensure_user(user_id, now)
 
         state.minute_timestamps.append(now)
