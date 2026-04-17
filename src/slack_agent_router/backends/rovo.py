@@ -13,6 +13,7 @@ import time
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import CallToolResult, ListToolsResult
 
 from slack_agent_router.models import BackendResult
 
@@ -95,21 +96,39 @@ class RovoMCPBackend:
             )
 
     async def health_check(self) -> bool:
-        """Check if the Rovo MCP Server is reachable."""
+        """Check if the Rovo MCP Server is reachable.
+
+        Uses list_tools() instead of a real search call to avoid
+        consuming Rovo API quota on every liveness probe.
+        """
         try:
             await asyncio.wait_for(
-                self._call_mcp_tool("health check"),
+                self._ping_server(),
                 timeout=self._timeout_seconds,
             )
         except Exception:
             return False
         return True
 
+    async def _ping_server(self) -> None:
+        """Open a connection and call list_tools() as a lightweight liveness check."""
+        headers = {
+            "Authorization": f"Bearer {self._api_token}",
+            "x-cloud-id": self._cloud_id,
+        }
+        async with streamablehttp_client(
+            url=self._mcp_server_url,
+            headers=headers,
+        ) as (read_stream, write_stream, _):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                await session.list_tools()
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _call_mcp_tool(self, question: str) -> object:
+    async def _call_mcp_tool(self, question: str) -> CallToolResult:
         """Connect to the MCP server and call the search tool.
 
         Opens a fresh Streamable HTTP connection, initialises the
@@ -137,15 +156,15 @@ class RovoMCPBackend:
                 )
                 return result
 
-    @staticmethod
-    def _resolve_tool_name(tools_response: object) -> str:
+    @classmethod
+    def _resolve_tool_name(cls, tools_response: ListToolsResult) -> str:
         """Pick the best search tool from the server's tool list.
 
         Falls back to the first available tool if no obvious search
         tool is found.
         """
         if not hasattr(tools_response, "tools") or not tools_response.tools:
-            return RovoMCPBackend._TOOL_NAME
+            return cls._TOOL_NAME
 
         for tool in tools_response.tools:
             name_lower = tool.name.lower()
@@ -154,7 +173,7 @@ class RovoMCPBackend:
 
         return tools_response.tools[0].name
 
-    def _parse_mcp_result(self, mcp_result: object, start: float) -> BackendResult:
+    def _parse_mcp_result(self, mcp_result: CallToolResult, start: float) -> BackendResult:
         """Convert an MCP tool result into a BackendResult."""
         if mcp_result.isError:
             error_text = self._extract_text(mcp_result)
@@ -190,7 +209,7 @@ class RovoMCPBackend:
         )
 
     @staticmethod
-    def _extract_text(mcp_result: object) -> str:
+    def _extract_text(mcp_result: CallToolResult) -> str:
         """Concatenate all text content items from an MCP result."""
         if not hasattr(mcp_result, "content") or not mcp_result.content:
             return ""
@@ -202,8 +221,14 @@ class RovoMCPBackend:
 
 
 def _extract_urls(text: str) -> list[str]:
-    """Extract all HTTP(S) URLs from text, preserving order and removing duplicates."""
-    return list(dict.fromkeys(_URL_PATTERN.findall(text)))
+    """Extract all HTTP(S) URLs from text, preserving order and removing duplicates.
+
+    Strips trailing sentence punctuation (. , ; : ! ?) that the regex
+    may accidentally capture when a URL appears mid-sentence.
+    """
+    raw = _URL_PATTERN.findall(text)
+    cleaned = [url.rstrip(".,;:!?") for url in raw]
+    return list(dict.fromkeys(cleaned))
 
 
 def _elapsed_ms(start: float) -> float:
