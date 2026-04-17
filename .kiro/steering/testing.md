@@ -4,6 +4,15 @@ inclusion: always
 
 # Testing Requirements
 
+## Test Runner
+
+This project uses **uv** as the package manager. Always run tests with `uv run pytest` instead of bare `pytest` or `python -m pytest`.
+
+- Run all tests: `uv run pytest`
+- Run a specific file: `uv run pytest tests/test_example.py`
+- Run with coverage: `uv run pytest --cov`
+- Run a single test: `uv run pytest -k "test_name"`
+
 ## Coverage Target: 80%+
 
 All new code should have test coverage. Three test types required:
