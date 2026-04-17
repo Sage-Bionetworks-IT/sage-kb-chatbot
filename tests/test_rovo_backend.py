@@ -330,15 +330,8 @@ class TestRovoMCPHealthCheck:
 
     async def test_health_check_returns_true_when_healthy(self, backend):
         """health_check returns True when MCP server is reachable."""
-        with patch.object(backend, "_call_mcp_tool", new_callable=AsyncMock) as mock_call:
-            content = MagicMock()
-            content.type = "text"
-            content.text = "ok"
-            result = MagicMock()
-            result.isError = False
-            result.content = [content]
-            mock_call.return_value = result
-
+        with patch.object(backend, "_ping_server", new_callable=AsyncMock) as mock_ping:
+            mock_ping.return_value = None
             healthy = await backend.health_check()
 
         assert isinstance(healthy, bool)
@@ -346,8 +339,8 @@ class TestRovoMCPHealthCheck:
 
     async def test_health_check_returns_false_when_unreachable(self, backend):
         """health_check returns False when MCP server is unreachable."""
-        with patch.object(backend, "_call_mcp_tool", new_callable=AsyncMock) as mock_call:
-            mock_call.side_effect = ConnectionError("Connection refused")
+        with patch.object(backend, "_ping_server", new_callable=AsyncMock) as mock_ping:
+            mock_ping.side_effect = ConnectionError("Connection refused")
 
             healthy = await backend.health_check()
 
@@ -358,8 +351,8 @@ class TestRovoMCPHealthCheck:
         """health_check returns False when MCP server times out."""
         import asyncio
 
-        with patch.object(backend, "_call_mcp_tool", new_callable=AsyncMock) as mock_call:
-            mock_call.side_effect = asyncio.TimeoutError()
+        with patch.object(backend, "_ping_server", new_callable=AsyncMock) as mock_ping:
+            mock_ping.side_effect = asyncio.TimeoutError()
 
             healthy = await backend.health_check()
 
@@ -368,8 +361,8 @@ class TestRovoMCPHealthCheck:
 
     async def test_health_check_returns_false_on_auth_error(self, backend):
         """health_check returns False when authentication fails."""
-        with patch.object(backend, "_call_mcp_tool", new_callable=AsyncMock) as mock_call:
-            mock_call.side_effect = PermissionError("401 Unauthorized")
+        with patch.object(backend, "_ping_server", new_callable=AsyncMock) as mock_ping:
+            mock_ping.side_effect = PermissionError("401 Unauthorized")
 
             healthy = await backend.health_check()
 
@@ -383,3 +376,58 @@ class TestRovoMCPBackendName:
     def test_name_property(self, backend):
         """name property returns the expected backend name."""
         assert backend.name == "Atlassian Rovo (Confluence/Jira)"
+
+
+class TestResolveToolName:
+    """Tests for _resolve_tool_name fallback logic."""
+
+    def test_picks_tool_with_search_in_name(self):
+        """When a tool name contains 'search', it is selected."""
+        tool_a = MagicMock()
+        tool_a.name = "list_pages"
+        tool_b = MagicMock()
+        tool_b.name = "confluence_search"
+        tools_response = MagicMock()
+        tools_response.tools = [tool_a, tool_b]
+
+        result = RovoMCPBackend._resolve_tool_name(tools_response)
+        assert result == "confluence_search"
+
+    def test_picks_tool_with_rovo_in_name(self):
+        """When a tool name contains 'rovo', it is selected."""
+        tool_a = MagicMock()
+        tool_a.name = "list_pages"
+        tool_b = MagicMock()
+        tool_b.name = "rovo_query"
+        tools_response = MagicMock()
+        tools_response.tools = [tool_a, tool_b]
+
+        result = RovoMCPBackend._resolve_tool_name(tools_response)
+        assert result == "rovo_query"
+
+    def test_falls_back_to_first_tool_when_no_search_or_rovo(self):
+        """When no tool name contains 'search' or 'rovo', the first tool is used."""
+        tool_a = MagicMock()
+        tool_a.name = "list_pages"
+        tool_b = MagicMock()
+        tool_b.name = "get_content"
+        tools_response = MagicMock()
+        tools_response.tools = [tool_a, tool_b]
+
+        result = RovoMCPBackend._resolve_tool_name(tools_response)
+        assert result == "list_pages"
+
+    def test_falls_back_to_default_when_tools_list_empty(self):
+        """When the tools list is empty, the default _TOOL_NAME is returned."""
+        tools_response = MagicMock()
+        tools_response.tools = []
+
+        result = RovoMCPBackend._resolve_tool_name(tools_response)
+        assert result == RovoMCPBackend._TOOL_NAME
+
+    def test_falls_back_to_default_when_no_tools_attr(self):
+        """When the response has no tools attribute, the default _TOOL_NAME is returned."""
+        tools_response = object()
+
+        result = RovoMCPBackend._resolve_tool_name(tools_response)
+        assert result == RovoMCPBackend._TOOL_NAME
