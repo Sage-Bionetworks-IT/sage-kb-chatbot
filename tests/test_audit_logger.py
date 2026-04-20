@@ -81,11 +81,11 @@ SECRET_PATTERNS = (
 
 secret_value = st.sampled_from(
     [
-        "xoxb-1234567890-abcdefghij",
-        "xapp-1-A0B1C2D3E4F-9876543210-deadbeef",
-        "sk-proj-abc123secret456",
-        "AKIAIOSFODNN7EXAMPLE",
-        "Bearer eyJhbGciOiJIUzI1NiJ9.secret",
+        "xoxb-1234567890-abcdefghij",  # pragma: allowlist secret
+        "xapp-1-A0B1C2D3E4F-9876543210-deadbeef",  # pragma: allowlist secret
+        "sk-proj-abc123secret456",  # pragma: allowlist secret
+        "AKIAIOSFODNN7EXAMPLE",  # pragma: allowlist secret
+        "Bearer eyJhbGciOiJIUzI1NiJ9.secret",  # pragma: allowlist secret
     ]
 )
 
