@@ -283,7 +283,7 @@ class TestNoSecretsInLogs:
 
     @given(record=query_audit_record(), secret=secret_value)
     @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-    def test_audit_log_excludes_secrets_in_question(self, record, secret, caplog):
+    def test_audit_log_excludes_secrets_in_answer(self, record, secret, caplog):
         """Secrets embedded in question text must not appear in log output."""
         caplog.clear()
         poisoned = QueryAuditRecord(
