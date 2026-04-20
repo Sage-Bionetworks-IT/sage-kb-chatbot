@@ -43,6 +43,11 @@ omit = ["src/slack_agent_router/models.py"]
 fail_under = 80
 show_missing = true
 
-[tool.black]
+[tool.ruff]
 line-length = 120
-target-version = ["py312"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.format]
+quote-style = "double"

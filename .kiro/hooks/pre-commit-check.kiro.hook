@@ -8,6 +8,6 @@
   },
   "then": {
     "type": "askAgent",
-    "prompt": "A git commit is about to be created. Before proceeding, run 'poetry pre-commit run' to check all staged files against the project's pre-commit hooks. If pre-commit reports failures, fix the issues before allowing the commit to proceed."
+    "prompt": "A git commit is about to be created. Before proceeding, run 'uv run pre-commit run' to check all staged files against the project's pre-commit hooks. If pre-commit reports failures, fix the issues before allowing the commit to proceed."
   }
 }

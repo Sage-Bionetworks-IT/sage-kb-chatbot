@@ -29,7 +29,7 @@ When writing code that handles user input, auth, or data:
 3. **Sensitive Data** — Encrypt PII, enforce HTTPS, sanitize logs
 4. **Broken Access Control** — Check auth on every endpoint
 5. **Misconfiguration** — No default creds, debug mode off in prod
-6. **Known Vulnerabilities** — Keep dependencies updated, run `pip-audit` or `safety check`
+6. **Known Vulnerabilities** — Keep dependencies updated, run `uv run pip-audit`
 
 ## Dangerous Patterns to Flag Immediately
 

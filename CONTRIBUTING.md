@@ -52,6 +52,40 @@ uv run pre-commit install
 uv run pre-commit run --all-files
 ```
 
+## Testing
+
+This project follows test-driven development (RED → GREEN → REFACTOR).
+All new code requires tests with 80%+ coverage.
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with coverage report
+uv run pytest --cov --cov-report=term-missing
+
+# Run a specific test file
+uv run pytest tests/test_sanitize.py -v
+
+# Run a single test by name
+uv run pytest -k "test_auth_failure_returns_failed_result"
+```
+
+### Test types
+
+- **Property tests** — use [Hypothesis](https://hypothesis.readthedocs.io/) to verify
+  universal correctness properties (e.g., "for any valid MCP response, the backend
+  produces a BackendResult with success=True")
+- **Unit tests** — specific scenarios and edge cases with `pytest`
+- **Integration tests** — full pipeline flows with mocked external services
+
+### Writing tests
+
+- Write tests first (RED), then implement (GREEN)
+- Async tests work automatically — just use `async def test_*` (no decorator needed)
+- Mock external dependencies (`AsyncMock` for async, `MagicMock` for sync)
+- Use `pytest.fixture` for shared setup and `pytest.mark.parametrize` for multiple inputs
+
 ## Commit Messages
 
 Use [conventional commits](https://www.conventionalcommits.org/):
