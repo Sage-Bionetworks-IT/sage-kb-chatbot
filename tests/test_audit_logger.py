@@ -352,7 +352,7 @@ class TestNoSecretsInLogs:
             logger.log_question_received("req-001", "U123", "xoxb-fake-token help me")
             logger.log_backend_result("req-001", "Rovo", True, 500.0)
             logger.log_rate_limited("req-001", "U123", "xapp-1-secret limit")
-            logger.log_error("req-001", "auth", RuntimeError("AKIAIOSFODNN7EXAMPLE"))
+            logger.log_error("req-001", "auth", RuntimeError("AKIAIOSFODNN7EXAMPLE"))  # pragma: allowlist secret
 
         full_output = " ".join(r.message for r in caplog.records)
         for prefix in SECRET_PATTERNS:
