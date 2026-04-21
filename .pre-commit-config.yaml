@@ -37,3 +37,12 @@ repos:
     hooks:
       - id: check-github-workflows
       - id: check-github-actions
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -x -q --no-header
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

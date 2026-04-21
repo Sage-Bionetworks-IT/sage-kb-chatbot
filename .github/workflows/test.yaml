@@ -4,7 +4,7 @@ on:
   workflow_call:
 
 jobs:
-  pytest:
+  pre-commit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,5 +14,5 @@ jobs:
         run: uv python install
       - name: Install dependencies
         run: uv sync --all-extras --frozen
-      - name: Run tests
-        run: uv run pytest --cov -q
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
