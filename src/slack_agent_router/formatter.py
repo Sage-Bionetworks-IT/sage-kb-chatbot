@@ -21,7 +21,7 @@ def format_answer(response: AgentResponse, elapsed_seconds: float) -> str:
 
     n = len(response.source_urls)
     label = "source" if n == 1 else "sources"
-    footer = f"_Synthesized from {n} {label}" f" in {elapsed_seconds:.1f}s_"
+    footer = f"_Synthesized from {n} {label} in {elapsed_seconds:.1f}s_"
     parts.append(footer)
 
     return "\n\n".join(parts)
@@ -35,7 +35,7 @@ def format_fallback_answer(
     Used when the Bedrock Agent fails after successful backend
     calls. Concatenates content and sources from each output.
     """
-    prefix = "I had trouble synthesizing a complete answer, " "but here's what I found from each source:"
+    prefix = "I had trouble synthesizing a complete answer, but here's what I found from each source:"
 
     if not tool_outputs:
         return prefix

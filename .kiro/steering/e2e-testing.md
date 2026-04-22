@@ -4,7 +4,7 @@ inclusion: manual
 
 # E2E Testing Skill
 
-Activate this skill when writing end-to-end or integration tests for the RAG pipeline and connectors.
+Activate this skill when writing end-to-end or integration tests for the Slack Agent Router.
 
 ## Test Structure
 
@@ -13,34 +13,21 @@ Encapsulate setup in reusable pytest fixtures:
 
 ```python
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 @pytest.fixture
-def opensearch_client():
-    client = get_test_opensearch_client()
-    yield client
-    # teardown: clean up test index
-    client.indices.delete(index="test-*", ignore_unavailable=True)
+def mock_orchestrator():
+    orch = AsyncMock()
+    orch.ask.return_value = AgentResponse(answer="...", source_urls=[], ...)
+    return orch
 
 @pytest.fixture
-def seeded_index(opensearch_client):
-    index_test_documents(opensearch_client)
-    return opensearch_client
-```
-
-### Test Pattern
-
-```python
-def test_rag_query_returns_cited_answer(seeded_index, mock_bedrock):
-    # Arrange
-    query = "What is the SOP for data access requests?"
-
-    # Act
-    result = run_rag_query(query, user_id="U123", opensearch_client=seeded_index)
-
-    # Assert
-    assert result.answer is not None
-    assert len(result.sources) > 0
-    assert result.confidence in ("High", "Medium", "Low")
+def mock_slack_client():
+    client = AsyncMock()
+    client.reactions_add = AsyncMock()
+    client.chat_postMessage = AsyncMock(return_value={"ts": "123"})
+    client.chat_update = AsyncMock()
+    return client
 ```
 
 ## Best Practices
@@ -49,16 +36,16 @@ def test_rag_query_returns_cited_answer(seeded_index, mock_bedrock):
 - Use `pytest.mark.parametrize` for multiple input scenarios
 - Test user-observable behavior, not internal implementation
 - Keep tests independent — each test starts from a clean state
-- Use `moto` for mocking AWS services (S3, SQS, Secrets Manager)
-- Use `unittest.mock.patch` or `pytest-mock` for Bedrock/OpenSearch
+- Use `moto` for mocking AWS services (Secrets Manager, Bedrock)
+- Use `unittest.mock.AsyncMock` for async Slack/MCP/Bedrock calls
 
 ## What to Test E2E
 
-- Full query flow: SQS message → identity lookup → retrieval → generation → Slack response
-- Connector ingestion: fetch → chunk → embed → index
-- Rate limiting behavior under concurrent load
-- Authorization filtering (restricted content not returned to unauthorized users)
-- Feedback flow: interaction payload → storage
+- Full query flow: ParsedQuestion → orchestrator.ask() → formatted Slack response
+- Backend error scenarios: single timeout, all fail, agent failure with fallback
+- Rate limiting + authorization flow: event → dedup → auth → rate limit → response
+- Health check endpoint: HTTP requests to /health with connected/disconnected states
+- Progressive UX: reaction → placeholder → update → final answer sequence
 
 ## What NOT to Test E2E
 
@@ -70,6 +57,6 @@ def test_rag_query_returns_cited_answer(seeded_index, mock_bedrock):
 
 1. Check pytest output with `-v` and `--tb=long`
 2. Look at mock call args to verify correct API calls
-3. Run the specific test in isolation: `pytest -k "test_name" -s`
+3. Run the specific test in isolation: `uv run pytest -k "test_name" -s`
 4. Add `breakpoint()` to stop at a specific point
 5. Check fixture teardown for leftover state

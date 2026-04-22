@@ -16,33 +16,17 @@ Activate this skill to perform a security audit on the codebase or recent change
 
 ### 2. OWASP Top 10 Check
 
-| # | Vulnerability | What to Check |
-|---|--------------|---------------|
-| 1 | Injection | All queries parameterized? (SQLAlchemy, psycopg2 `%s`) User input sanitized? |
-| 2 | Broken Auth | Tokens validated? Sessions secure? |
-| 3 | Sensitive Data | HTTPS enforced? PII encrypted? Logs sanitized? |
-| 4 | Broken Access | Auth checked on every endpoint? IAM least-privilege? |
-| 5 | Misconfiguration | Default creds changed? Debug off in prod? Security headers? |
-| 6 | Known Vulnerabilities | Dependencies up to date? `pip-audit` clean? |
-| 7 | Insecure Deserialization | `pickle.loads()` on untrusted data? |
-| 8 | Insufficient Logging | Security events logged? Alerts configured? |
+See `security.md` for the full OWASP checklist and dangerous patterns table. During review, verify each item against the changed code.
 
 ### 3. Dependency Audit
-- Run `pip-audit` or `safety check`
+- Run `uv run pip-audit`
 - Check for known CVEs in dependencies
-- Verify `requirements.txt` / `poetry.lock` are committed
+- Verify `uv.lock` is committed
 - Remove unused dependencies
 
 ### 4. Dangerous Code Patterns
 
-Flag these immediately:
-- `eval()` / `exec()` with any external input
-- `subprocess` with `shell=True` and user-provided strings
-- `pickle.loads()` on untrusted data
-- `os.system()` with user-controlled strings
-- Plaintext secret comparison
-- Database queries with string concatenation instead of parameterization
-- File operations with user-controlled paths (path traversal risk)
+See `security.md` for the complete list. During review, flag any matches in changed files.
 
 ## Output Format
 

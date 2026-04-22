@@ -15,6 +15,8 @@ fileMatchPattern: "**/*.py"
 
 ## Error Handling
 
+See `error-handling.md` for comprehensive rules. Python-specific example:
+
 ```python
 # GOOD: Specific exception handling
 try:
@@ -25,12 +27,6 @@ except ValueError as e:
 except ConnectionError as e:
     logger.error(f"Connection failed: {e}")
     return fallback_result()
-
-# BAD: Bare except
-try:
-    result = process_data(input_data)
-except:  # Catches everything including KeyboardInterrupt
-    pass  # Silently swallows errors
 ```
 
 ## Project Structure
@@ -38,7 +34,6 @@ except:  # Catches everything including KeyboardInterrupt
 - Use `__init__.py` to define public API of packages
 - Separate concerns: models, services, routes, utils
 - Use dataclasses or Pydantic models for structured data
-- Keep modules focused and under 500 lines
 
 ## Async
 
@@ -49,7 +44,4 @@ except:  # Catches everything including KeyboardInterrupt
 
 ## Testing
 
-- Use pytest over unittest
-- Use fixtures for test setup/teardown
-- Use parametrize for testing multiple inputs
-- Mock external dependencies with `unittest.mock` or `pytest-mock`
+See `testing.md` for test requirements and `tdd-workflow.md` for the TDD cycle.
