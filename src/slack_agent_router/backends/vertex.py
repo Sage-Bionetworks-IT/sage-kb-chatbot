@@ -111,7 +111,8 @@ class VertexAISearchBackend:
         """Execute a search request against the Discovery Engine API.
 
         Creates a fresh client per request to avoid holding connections
-        open between requests.
+        open between requests. The client's transport is closed in a
+        finally block to prevent leaking gRPC channels/sockets.
         """
         credentials = Credentials.from_service_account_info(
             self._credentials_info,
@@ -119,20 +120,23 @@ class VertexAISearchBackend:
         )
         client = SearchServiceAsyncClient(credentials=credentials)
 
-        request = SearchRequest(
-            serving_config=self._serving_config,
-            query=question,
-            page_size=10,
-            content_search_spec=SearchRequest.ContentSearchSpec(
-                summary_spec=SearchRequest.ContentSearchSpec.SummarySpec(
-                    summary_result_count=5,
-                    include_citations=True,
+        try:
+            request = SearchRequest(
+                serving_config=self._serving_config,
+                query=question,
+                page_size=10,
+                content_search_spec=SearchRequest.ContentSearchSpec(
+                    summary_spec=SearchRequest.ContentSearchSpec.SummarySpec(
+                        summary_result_count=5,
+                        include_citations=True,
+                    ),
                 ),
-            ),
-        )
+            )
 
-        response = await client.search(request=request)
-        return response
+            response = await client.search(request=request)
+            return response
+        finally:
+            await client.transport.close()
 
     def _parse_response(self, response: object, start: float) -> BackendResult:
         """Convert a Discovery Engine SearchResponse into a BackendResult."""
@@ -171,7 +175,7 @@ def _extract_source_urls(response: object) -> list[str]:
         if doc is None:
             continue
         struct_data = getattr(doc, "derived_struct_data", None)
-        if struct_data and isinstance(struct_data, dict):
+        if struct_data and hasattr(struct_data, "get"):
             link = struct_data.get("link")
             if link and link not in urls:
                 urls.append(link)
