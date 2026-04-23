@@ -307,3 +307,118 @@ class TestVertexBackendName:
     def test_name_property(self, backend):
         """name property returns the expected backend name."""
         assert backend.name == "Google Sites (Vertex AI Search)"
+
+
+class TestVertexEmptySummary:
+    """Edge case: API returns results but no usable summary text."""
+
+    async def test_none_summary_returns_failed_result(self, backend):
+        """When response.summary is None, BackendResult has success=False."""
+        api_response = MagicMock()
+        api_response.results = [MagicMock()]
+        api_response.summary = None
+
+        with patch.object(backend, "_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = api_response
+            result = await backend.query("test question")
+
+        assert isinstance(result, BackendResult)
+        assert result.success is False
+        assert result.error_message == "Vertex AI Search returned no summary"
+
+    async def test_empty_summary_text_returns_failed_result(self, backend):
+        """When summary_text is empty string, BackendResult has success=False."""
+        api_response = MagicMock()
+        api_response.results = [MagicMock()]
+        api_response.summary = MagicMock()
+        api_response.summary.summary_text = ""
+
+        with patch.object(backend, "_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = api_response
+            result = await backend.query("test question")
+
+        assert isinstance(result, BackendResult)
+        assert result.success is False
+        assert result.error_message == "Vertex AI Search returned no summary"
+
+    async def test_whitespace_summary_text_returns_failed_result(self, backend):
+        """When summary_text is only whitespace, BackendResult has success=False."""
+        api_response = MagicMock()
+        api_response.results = [MagicMock()]
+        api_response.summary = MagicMock()
+        api_response.summary.summary_text = "   \n\t  "
+
+        with patch.object(backend, "_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = api_response
+            result = await backend.query("test question")
+
+        assert isinstance(result, BackendResult)
+        assert result.success is False
+        assert result.error_message == "Vertex AI Search returned no summary"
+
+
+class TestVertexProtoLikeStructData:
+    """Ensure URL extraction works with non-dict Mapping types (e.g., proto MapComposite)."""
+
+    async def test_mapping_proxy_struct_data_extracts_urls(self, backend):
+        """derived_struct_data as MappingProxyType (Mapping but not dict) still yields source URLs."""
+        from types import MappingProxyType
+
+        url = "https://sites.google.com/sage.com/handbook/pto"
+        struct_data = MappingProxyType({"link": url, "title": "PTO Policy"})
+
+        result_mock = MagicMock()
+        result_mock.document = MagicMock()
+        result_mock.document.derived_struct_data = struct_data
+
+        api_response = MagicMock()
+        api_response.results = [result_mock]
+        api_response.summary = MagicMock()
+        api_response.summary.summary_text = "PTO policy allows 20 days per year."
+
+        with patch.object(backend, "_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = api_response
+            result = await backend.query("What is our PTO policy?")
+
+        assert isinstance(result, BackendResult)
+        assert result.success is True
+        assert url in result.source_urls
+
+    async def test_custom_mapping_struct_data_extracts_urls(self, backend):
+        """derived_struct_data as a custom Mapping (simulating proto MapComposite) yields source URLs."""
+        from collections.abc import Iterator, Mapping
+
+        class ProtoMapComposite(Mapping):
+            """Minimal Mapping that mimics proto MapComposite behavior."""
+
+            def __init__(self, data: dict):
+                self._data = data
+
+            def __getitem__(self, key: str) -> str:
+                return self._data[key]
+
+            def __iter__(self) -> Iterator[str]:
+                return iter(self._data)
+
+            def __len__(self) -> int:
+                return len(self._data)
+
+        url = "https://sites.google.com/sage.com/policies/leave"
+        struct_data = ProtoMapComposite({"link": url, "title": "Leave Policy"})
+
+        result_mock = MagicMock()
+        result_mock.document = MagicMock()
+        result_mock.document.derived_struct_data = struct_data
+
+        api_response = MagicMock()
+        api_response.results = [result_mock]
+        api_response.summary = MagicMock()
+        api_response.summary.summary_text = "Leave policy details."
+
+        with patch.object(backend, "_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = api_response
+            result = await backend.query("What is the leave policy?")
+
+        assert isinstance(result, BackendResult)
+        assert result.success is True
+        assert url in result.source_urls
