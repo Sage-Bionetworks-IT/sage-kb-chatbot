@@ -2,7 +2,6 @@
 
 ci:
   autoupdate_schedule: monthly
-  skip: [pytest]
 
 default_language_version:
   python: python3
@@ -38,13 +37,3 @@ repos:
     hooks:
       - id: check-github-workflows
       - id: check-github-actions
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: uv run pytest -x -q --cov
-        language: system
-        pass_filenames: false
-        types_or: [python]
-        files: ^(src/|tests/|pyproject\.toml)
-        stages: [pre-commit]
