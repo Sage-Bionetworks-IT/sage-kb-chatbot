@@ -51,13 +51,13 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - _Requirements: 9.1, 10.7_
 
 - [ ] 2. Implement structured logging and audit trail
-  - [ ] 2.1 Write property tests for audit logging (RED)
+  - [x] 2.1 Write property tests for audit logging (RED)
     - **Property 14: Audit log structure and completeness** — for any QueryAuditRecord, the emitted log is valid JSON with all required fields
     - **Property 15: No secrets in log output** — for any log entry, the output does not contain API tokens, secrets, or credentials even if present in input data
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 12.1, 12.2, 12.4, 12.6**
 
-  - [ ] 2.2 Implement AuditLogger (GREEN)
+  - [x] 2.2 Implement AuditLogger (GREEN)
     - Create `src/slack_agent_router/audit_logger.py`
     - Configure structured JSON logging using Python `logging` module
     - Implement log_question_received, log_backend_result, log_agent_result, log_answer_posted, log_rate_limited, log_error methods

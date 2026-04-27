@@ -4,6 +4,11 @@ inclusion: always
 
 # Coding Style
 
+## Line Length
+
+- Use a maximum line length of 120 characters for all generated code
+- This applies to Python source files, test files, and configuration files
+
 ## Immutability
 
 Prefer immutable patterns where practical:
