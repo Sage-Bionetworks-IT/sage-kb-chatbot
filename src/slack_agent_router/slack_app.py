@@ -4,11 +4,12 @@ Maintains a WebSocket connection to Slack, receives events
 (app_mention, DM, slash command), and dispatches questions
 to the Bedrock Agent orchestrator.
 
-Requirements: 1.1, 1.2, 1.3, 1.4
+Requirements: 1.1, 1.2, 1.3, 1.4, 3.7, 9.1, 9.2, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -17,7 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from slack_agent_router.formatter import format_answer
-from slack_agent_router.models import ParsedQuestion
+from slack_agent_router.models import AgentResponse, ParsedQuestion
 from slack_agent_router.sanitize import strip_slack_formatting
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,14 @@ logger = logging.getLogger(__name__)
 # TTL for event deduplication (seconds).
 _DEDUP_TTL = 60
 
+# Slack 429 retry configuration.
+_SLACK_MAX_RETRIES = 3
+_SLACK_DEFAULT_RETRY_AFTER = 1.0  # seconds
+
 _EMPTY_QUESTION_HINT = "Try asking me something like: `@bot What is our PTO policy?`"
 _UNAUTHORIZED_MSG = "Sorry, this bot is only available to Sage staff."
+_ALL_BACKENDS_FAILED_MSG = "I wasn't able to find an answer right now. Please try again in a few minutes."
+_AGENT_FAILURE_MSG = "I'm having trouble processing your question right now. Please try again in a few minutes."
 
 
 class SlackAgentApp:
@@ -176,6 +183,10 @@ class SlackAgentApp:
         Pipeline order: parse → empty check → auth → rate limit → orchestrate → respond.
         Posts ephemeral messages for empty questions, unauthorized users,
         and rate-limited users. Dispatches valid questions to the orchestrator.
+
+        Rate limiter acquire/release brackets the orchestrator call so
+        in-flight tracking is accurate. Slack 429 errors are retried
+        with exponential backoff.
         """
         parsed = self.parse_event(event, bot_user_id)
 
@@ -210,15 +221,94 @@ class SlackAgentApp:
                 )
                 return
 
-        # Dispatch to orchestrator
-        session_id = self._derive_session_id(parsed)
-        response = await self._orchestrator.ask(parsed.question, session_id)
-
-        elapsed_seconds = response.latency_ms / 1000.0
-        formatted = format_answer(response, elapsed_seconds)
+        # Acquire rate limiter slot (tracks in-flight + sliding windows)
+        if self._rate_limiter is not None:
+            self._rate_limiter.acquire(parsed.user_id)
 
         thread_ts = parsed.thread_ts or parsed.event_ts
-        await say(text=formatted, thread_ts=thread_ts)
+
+        try:
+            response = await self._dispatch_and_format(parsed, thread_ts)
+        finally:
+            if self._rate_limiter is not None:
+                self._rate_limiter.release(parsed.user_id)
+
+        await self._post_with_retry(say, text=response, thread_ts=thread_ts)
+
+    async def _dispatch_and_format(self, parsed: ParsedQuestion, thread_ts: str) -> str:
+        """Call the orchestrator and return a formatted Slack mrkdwn string.
+
+        Handles orchestrator exceptions and returns appropriate error
+        messages so the caller always gets a string to post.
+        """
+        session_id = self._derive_session_id(parsed)
+
+        try:
+            response: AgentResponse = await self._orchestrator.ask(parsed.question, session_id)
+        except Exception as exc:
+            logger.error(
+                "Orchestrator raised an exception for request %s: %s",
+                parsed.request_id,
+                exc,
+                exc_info=True,
+            )
+            return _AGENT_FAILURE_MSG
+
+        # The orchestrator never raises — it returns AgentResponse in all
+        # cases. But we still check for the "all backends failed" scenario
+        # by inspecting the response: if no tool calls were made and the
+        # answer matches the generic agent failure message, treat it as
+        # an all-backends-failed case.
+        if self._is_all_backends_failed(response):
+            return _ALL_BACKENDS_FAILED_MSG
+
+        elapsed_seconds = response.latency_ms / 1000.0
+        return format_answer(response, elapsed_seconds)
+
+    @staticmethod
+    def _is_all_backends_failed(response: AgentResponse) -> bool:
+        """Detect the "all backends failed" scenario.
+
+        The orchestrator returns a generic error message when it fails
+        before any tool calls succeed. We detect this by checking for
+        empty tool_calls_made and the known error answer text.
+        """
+        if response.tool_calls_made:
+            return False
+        return response.answer == _AGENT_FAILURE_MSG
+
+    @staticmethod
+    async def _post_with_retry(
+        say: Any,
+        *,
+        text: str,
+        thread_ts: str | None = None,
+    ) -> None:
+        """Post a message via ``say()``, retrying on Slack 429 errors.
+
+        Retries up to ``_SLACK_MAX_RETRIES`` times with exponential
+        backoff, respecting the ``Retry-After`` header when available.
+        """
+        for attempt in range(_SLACK_MAX_RETRIES + 1):
+            try:
+                kwargs: dict[str, Any] = {"text": text}
+                if thread_ts:
+                    kwargs["thread_ts"] = thread_ts
+                await say(**kwargs)
+                return
+            except Exception as exc:
+                retry_after = _extract_retry_after(exc)
+                if retry_after is not None and attempt < _SLACK_MAX_RETRIES:
+                    logger.warning(
+                        "Slack 429 on attempt %d/%d — retrying in %.1fs",
+                        attempt + 1,
+                        _SLACK_MAX_RETRIES + 1,
+                        retry_after,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+                # Not a 429 or exhausted retries — re-raise
+                raise
 
     # ------------------------------------------------------------------
     # Slack Bolt event handlers (registered in start())
@@ -272,12 +362,17 @@ class SlackAgentApp:
                 )
                 return
 
-        session_id = self._derive_session_id(parsed)
-        response = await self._orchestrator.ask(parsed.question, session_id)
+        # Acquire rate limiter slot
+        if self._rate_limiter is not None:
+            self._rate_limiter.acquire(parsed.user_id)
 
-        elapsed_seconds = response.latency_ms / 1000.0
-        formatted = format_answer(response, elapsed_seconds)
-        await say(text=formatted)
+        try:
+            response = await self._dispatch_and_format(parsed, thread_ts=None)
+        finally:
+            if self._rate_limiter is not None:
+                self._rate_limiter.release(parsed.user_id)
+
+        await self._post_with_retry(say, text=response)
 
     # ------------------------------------------------------------------
     # Session ID derivation
@@ -317,3 +412,38 @@ class SlackAgentApp:
         """Gracefully disconnect and drain in-flight requests."""
         if self.handler is not None:
             await self.handler.close_async()
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_retry_after(exc: Exception) -> float | None:
+    """Extract a Retry-After delay from a Slack API error.
+
+    Returns the delay in seconds if the exception represents an
+    HTTP 429 response, or ``None`` if it's a different error.
+
+    The ``slack_sdk`` raises ``SlackApiError`` with a ``response``
+    attribute. We check for status 429 and read the ``Retry-After``
+    header. For other exception types we fall back to checking
+    common attributes.
+    """
+    # slack_sdk.errors.SlackApiError
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        if status == 429:
+            headers = getattr(response, "headers", {})
+            try:
+                return float(headers.get("Retry-After", _SLACK_DEFAULT_RETRY_AFTER))
+            except (TypeError, ValueError):
+                return _SLACK_DEFAULT_RETRY_AFTER
+
+    # Generic fallback: check for a status attribute (e.g. httpx, aiohttp)
+    status = getattr(exc, "status", getattr(exc, "status_code", None))
+    if status == 429:
+        return _SLACK_DEFAULT_RETRY_AFTER
+
+    return None

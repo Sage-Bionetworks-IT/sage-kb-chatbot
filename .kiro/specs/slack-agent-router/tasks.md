@@ -171,7 +171,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Parse events into ParsedQuestion model
     - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-  - [ ] 9.3 Wire rate limiting, orchestrator, formatting, and error handling into event handlers (GREEN)
+  - [x] 9.3 Wire rate limiting, orchestrator, formatting, and error handling into event handlers (GREEN)
     - Check rate limits before dispatching (post ephemeral on limit exceeded)
     - Validate non-empty question text (post ephemeral hint for empty questions)
     - Call orchestrator.ask() and format response
