@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -66,14 +65,12 @@ class SlackAgentApp:
         orchestrator: Any,
         rate_limiter: Any | None = None,
         auth_check: Callable[..., Any] | None = None,
-        clock: Callable[[], float] | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._app_token = app_token
         self._orchestrator = orchestrator
         self._rate_limiter = rate_limiter
         self._auth_check = auth_check
-        self._clock = clock or time.monotonic
         # Populated lazily by start()
         self.app: Any | None = None
         self.handler: Any | None = None
@@ -261,13 +258,12 @@ class SlackAgentApp:
     def _is_all_backends_failed(response: AgentResponse) -> bool:
         """Detect the "all backends failed" scenario.
 
-        The orchestrator returns a generic error message when it fails
-        before any tool calls succeed. We detect this by checking for
-        empty tool_calls_made and the known error answer text.
+        When the orchestrator fails before any tool calls succeed, it
+        returns an AgentResponse with empty tool_calls_made and no
+        source_urls. We use this structural check rather than matching
+        on the error message text.
         """
-        if response.tool_calls_made:
-            return False
-        return response.answer == _AGENT_FAILURE_MSG
+        return not response.tool_calls_made and not response.source_urls
 
     @staticmethod
     async def _post_with_retry(

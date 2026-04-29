@@ -1,19 +1,17 @@
-"""Tests for SlackAgentApp (RED).
+"""Tests for SlackAgentApp.
 
-Property 1: Event deduplication prevents reprocessing — submitting the
-            same event ID within 60s returns duplicate; unseen IDs are
-            accepted.
 Property 2: Bot mention prefix stripping — for any text with bot mention
             prefix, the extracted question does not contain the prefix
             and preserves the rest.
 
 Unit tests: event parsing for app_mention, DM, and slash command; empty
 question rejection with ephemeral message; unauthorized user receives
-ephemeral rejection; rate-limited user receives ephemeral message.
+ephemeral rejection; rate-limited user receives ephemeral message;
+rate limiter acquire/release bracketing; orchestrator error handling;
+Slack 429 retry with exponential backoff; thread reply posting;
+agent failure fallback.
 
-These tests should FAIL until tasks 9.2–9.6 implement the SlackAgentApp.
-
-Validates: Requirements 1.1, 1.2, 1.3, 1.5, 1.6, 2.2, 3.7, 10.5
+Validates: Requirements 1.1, 1.2, 1.3, 2.2, 3.7, 9.1, 9.2, 10.3, 10.4, 10.5, 10.6, 10.7
 """
 
 from __future__ import annotations
@@ -64,7 +62,6 @@ def _make_app(
     orchestrator=None,
     rate_limiter=None,
     auth_check=None,
-    clock=None,
 ) -> SlackAgentApp:
     """Build a SlackAgentApp with sensible mock defaults."""
     return SlackAgentApp(
@@ -73,7 +70,6 @@ def _make_app(
         orchestrator=orchestrator or AsyncMock(),
         rate_limiter=rate_limiter or MagicMock(spec=RateLimiter),
         auth_check=auth_check or AsyncMock(return_value=True),
-        clock=clock,
     )
 
 
@@ -546,11 +542,11 @@ class TestOrchestratorErrorHandling:
 
     @pytest.mark.asyncio
     async def test_all_backends_failed_posts_specific_message(self, mock_auth_check) -> None:
-        """When orchestrator returns no tool calls + failure answer, post all-backends-failed message."""
+        """When orchestrator returns no tool calls and no sources, post all-backends-failed message."""
         orch = AsyncMock()
         orch.ask = AsyncMock(
             return_value=AgentResponse(
-                answer=_AGENT_FAILURE_MSG,
+                answer="Some error from orchestrator",
                 source_urls=[],
                 tool_calls_made=[],
                 latency_ms=500.0,
@@ -581,12 +577,12 @@ class TestOrchestratorErrorHandling:
 
     @pytest.mark.asyncio
     async def test_successful_tool_calls_with_failure_answer_not_treated_as_all_failed(self, mock_auth_check) -> None:
-        """When orchestrator made tool calls, even with a failure-like answer, it's not all-backends-failed."""
+        """When orchestrator made tool calls, even with no sources, it's not all-backends-failed."""
         orch = AsyncMock()
         orch.ask = AsyncMock(
             return_value=AgentResponse(
-                answer=_AGENT_FAILURE_MSG,
-                source_urls=["https://example.com"],
+                answer="Partial answer from fallback",
+                source_urls=[],
                 tool_calls_made=["SearchConfluenceJira"],
                 latency_ms=500.0,
             )
