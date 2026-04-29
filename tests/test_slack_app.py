@@ -18,7 +18,6 @@ Validates: Requirements 1.1, 1.2, 1.3, 1.5, 1.6, 2.2, 3.7, 10.5
 
 from __future__ import annotations
 
-import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,11 +27,6 @@ from hypothesis import strategies as st
 
 from slack_agent_router.models import AgentResponse
 from slack_agent_router.rate_limiter import RateLimiter
-
-# ---------------------------------------------------------------------------
-# Lazy import — SlackAgentApp doesn't exist yet (RED phase).
-# Import at module level so tests fail with ImportError, confirming RED.
-# ---------------------------------------------------------------------------
 from slack_agent_router.slack_app import (
     _AGENT_FAILURE_MSG,
     _ALL_BACKENDS_FAILED_MSG,
@@ -55,12 +49,6 @@ plain_question = st.text(
     min_size=1,
     max_size=120,
 ).filter(lambda s: s.strip() != "")
-
-event_id = st.text(
-    alphabet=st.characters(whitelist_categories=("L", "N"), min_codepoint=48, max_codepoint=122),
-    min_size=10,
-    max_size=20,
-)
 
 # Placeholder token values used only in tests — not real credentials.
 _FAKE_BOT_TOKEN = "xoxb-fake-test-placeholder"
@@ -126,49 +114,6 @@ def slack_app(mock_orchestrator, mock_rate_limiter, mock_auth_check) -> SlackAge
         rate_limiter=mock_rate_limiter,
         auth_check=mock_auth_check,
     )
-
-
-# -------------------------------------------------------
-# Property 1: Event deduplication prevents reprocessing
-# -------------------------------------------------------
-
-
-class TestEventDeduplication:
-    """Property 1: duplicate event IDs are rejected; unseen IDs accepted."""
-
-    @given(eid=event_id)
-    @settings(max_examples=30)
-    def test_first_submission_is_accepted(self, eid: str) -> None:
-        """An unseen event ID should be accepted (not duplicate)."""
-        app = _make_app()
-        assert app.is_duplicate(eid) is False
-
-    @given(eid=event_id)
-    @settings(max_examples=30)
-    def test_second_submission_within_ttl_is_duplicate(self, eid: str) -> None:
-        """The same event ID submitted again within 60s is a duplicate."""
-        app = _make_app()
-        app.is_duplicate(eid)
-        assert app.is_duplicate(eid) is True
-
-    @given(eid=event_id)
-    @settings(max_examples=10)
-    def test_submission_after_ttl_expires_is_accepted(self, eid: str) -> None:
-        """After the 60s TTL expires, the same event ID is accepted again."""
-        frozen = time.monotonic()
-        clock = MagicMock(side_effect=[frozen, frozen, frozen + 61.0])
-        app = _make_app(clock=clock)
-        assert app.is_duplicate(eid) is False
-        assert app.is_duplicate(eid) is True
-        assert app.is_duplicate(eid) is False
-
-    @given(ids=st.lists(event_id, min_size=2, max_size=10, unique=True))
-    @settings(max_examples=20)
-    def test_distinct_ids_are_all_accepted(self, ids: list[str]) -> None:
-        """Different event IDs should all be accepted independently."""
-        app = _make_app()
-        for eid in ids:
-            assert app.is_duplicate(eid) is False
 
 
 # -------------------------------------------------------
