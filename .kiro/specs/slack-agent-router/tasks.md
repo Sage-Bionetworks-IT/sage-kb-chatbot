@@ -171,27 +171,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Parse events into ParsedQuestion model
     - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-  - [ ] 9.3 Implement event deduplication (GREEN)
-    - Add in-memory TTL cache (60-second window) for event_id/envelope_id deduplication
-    - Deduplicate slash commands on trigger_id
-    - Skip processing silently for duplicate events
-    - _Requirements: 1.5, 1.6_
-
-  - [ ] 9.4 Implement authorization check (GREEN)
-    - Check user membership in authorized Slack User Group (sage-all) before processing
-    - Respond with ephemeral message for unauthorized users
-    - Run authorization after deduplication and before rate limiting
-    - _Requirements: 2.1, 2.2, 2.3_
-
-  - [ ] 9.5 Implement progressive UX feedback (GREEN)
-    - Add 👀 reaction immediately on question receipt
-    - Post "⏳ Thinking..." placeholder message in thread
-    - Update placeholder as each backend is searched (e.g., "⏳ Searching Confluence and Jira...")
-    - Update placeholder with final answer via chat.update
-    - Remove 👀 and add ✅ when answer is posted
-    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
-
-  - [ ] 9.6 Wire rate limiting, orchestrator, formatting, and error handling into event handlers (GREEN)
+  - [ ] 9.3 Wire rate limiting, orchestrator, formatting, and error handling into event handlers (GREEN)
     - Check rate limits before dispatching (post ephemeral on limit exceeded)
     - Validate non-empty question text (post ephemeral hint for empty questions)
     - Call orchestrator.ask() and format response
@@ -200,81 +180,108 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run all tests from 9.1 — all must pass
     - _Requirements: 3.7, 9.1, 9.2, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7_
 
-- [ ] 10. Implement health check server
-  - [ ] 10.1 Write unit tests for HealthCheck (RED)
-    - Test returns 200 when WebSocket connected
-    - Test returns 503 when WebSocket disconnected
-    - Test backend timeout handling reports "timeout" in response
-    - Tests should fail initially (no implementation yet)
-    - _Requirements: 11.2, 11.3, 11.5_
-
-  - [ ] 10.2 Implement HealthCheck HTTP server (GREEN)
-    - Create `src/slack_agent_router/health.py`
-    - Run aiohttp server on port 8080 with /health endpoint
-    - Return HTTP 200 when WebSocket is connected, HTTP 503 when disconnected
-    - Include backend health status in response body (informational, does not affect HTTP status)
-    - Enforce 500ms timeout per backend health check using asyncio.wait_for
-    - Run tests from 10.1 — all must pass
-    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
-
-- [ ] 11. Implement application entrypoint and graceful shutdown
-  - [ ] 11.1 Implement main.py entrypoint
+- [ ] 10. Implement application entrypoint for end-to-end testing
+  - [ ] 10.1 Implement main.py entrypoint
     - Create `src/slack_agent_router/main.py`
     - Load secrets from AWS Secrets Manager
     - Initialize all components: backends, orchestrator, rate limiter, SlackAgentApp, HealthCheck
     - Start health check and Socket Mode concurrently with asyncio.gather
     - _Requirements: 14.5_
 
-  - [ ] 11.2 Implement graceful shutdown signal handling
+- [ ] 11. End-to-end manual testing checkpoint
+  - Run the bot locally with real Slack credentials and verify question → answer flow works end-to-end
+  - Test app_mention, DM, and /sage-ask slash command inputs
+  - Verify answers are posted as thread replies with citations
+
+- [ ] 12. Implement event deduplication, authorization, and progressive UX
+  - [ ] 12.1 Implement event deduplication (GREEN)
+    - Add in-memory TTL cache (60-second window) for event_id/envelope_id deduplication
+    - Deduplicate slash commands on trigger_id
+    - Skip processing silently for duplicate events
+    - _Requirements: 1.5, 1.6_
+
+  - [ ] 12.2 Implement authorization check (GREEN)
+    - Check user membership in authorized Slack User Group (sage-all) before processing
+    - Respond with ephemeral message for unauthorized users
+    - Run authorization after deduplication and before rate limiting
+    - _Requirements: 2.1, 2.2, 2.3_
+
+  - [ ] 12.3 Implement progressive UX feedback (GREEN)
+    - Add 👀 reaction immediately on question receipt
+    - Post "⏳ Thinking..." placeholder message in thread
+    - Update placeholder as each backend is searched (e.g., "⏳ Searching Confluence and Jira...")
+    - Update placeholder with final answer via chat.update
+    - Remove 👀 and add ✅ when answer is posted
+    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
+
+- [ ] 13. Implement health check server
+  - [ ] 13.1 Write unit tests for HealthCheck (RED)
+    - Test returns 200 when WebSocket connected
+    - Test returns 503 when WebSocket disconnected
+    - Test backend timeout handling reports "timeout" in response
+    - Tests should fail initially (no implementation yet)
+    - _Requirements: 11.2, 11.3, 11.5_
+
+  - [ ] 13.2 Implement HealthCheck HTTP server (GREEN)
+    - Create `src/slack_agent_router/health.py`
+    - Run aiohttp server on port 8080 with /health endpoint
+    - Return HTTP 200 when WebSocket is connected, HTTP 503 when disconnected
+    - Include backend health status in response body (informational, does not affect HTTP status)
+    - Enforce 500ms timeout per backend health check using asyncio.wait_for
+    - Run tests from 13.1 — all must pass
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
+
+- [ ] 14. Implement graceful shutdown
+  - [ ] 14.1 Implement graceful shutdown signal handling
     - Register SIGTERM and SIGINT handlers via asyncio event loop
     - Drain in-flight requests before disconnecting WebSocket
     - Complete or abandon in-flight questions within ECS stop timeout (30s)
     - _Requirements: 13.1, 13.2_
 
-- [ ] 12. Checkpoint - Ensure all tests pass
+- [ ] 15. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 13. Implement integration tests
-  - [ ] 13.1 Write integration test for full question-to-answer flow
+- [ ] 16. Implement integration tests
+  - [ ] 16.1 Write integration test for full question-to-answer flow
     - Test the complete pipeline: ParsedQuestion → orchestrator.ask() → formatted Slack response
     - Mock Bedrock Agent API responses (return control loop with tool requests and final answer)
     - Mock backend HTTP calls (Rovo MCP, Vertex AI Search) with realistic response fixtures
     - Verify progressive UX calls are made in correct order (reaction → placeholder → update → final)
     - _Requirements: 5.1, 5.2, 9.1, 4.1, 4.2, 4.3, 4.4, 4.5_
 
-  - [ ] 13.2 Write integration test for backend error scenarios
+  - [ ] 16.2 Write integration test for backend error scenarios
     - Test single backend timeout with other backend succeeding — verify partial answer is returned
     - Test all backends failing — verify "unable to find an answer" message is posted
     - Test Bedrock Agent failure after successful tool calls — verify fallback response with raw outputs
     - _Requirements: 10.2, 10.3, 10.6, 10.7_
 
-  - [ ] 13.3 Write integration test for rate limiting and authorization flow
+  - [ ] 16.3 Write integration test for rate limiting and authorization flow
     - Test authorized user flow end-to-end: event → dedup → auth → rate limit → orchestrator → response
     - Test unauthorized user is rejected with ephemeral message before any backend calls
     - Test rate-limited user receives ephemeral message and no backend calls are made
     - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.7_
 
-  - [ ] 13.4 Write integration test for health check endpoint
+  - [ ] 16.4 Write integration test for health check endpoint
     - Start the aiohttp health server and make real HTTP requests to /health
     - Test healthy response when WebSocket mock reports connected
     - Test unhealthy response when WebSocket mock reports disconnected
     - Test backend health timeout handling with slow mock backends
     - _Requirements: 11.1, 11.2, 11.3, 11.5_
 
-- [ ] 14. Implement CDK infrastructure stack
-  - [ ] 14.1 Create CDK app and stack
+- [ ] 17. Implement CDK infrastructure stack
+  - [ ] 17.1 Create CDK app and stack
     - Create `infra/` directory with CDK Python app
     - Define ECS Fargate service: 0.25 vCPU, 0.5 GB memory, single task
     - Configure container health check using /health endpoint on port 8080
     - _Requirements: 14.1, 14.4_
 
-  - [ ] 14.2 Configure IAM, secrets, and logging
+  - [ ] 17.2 Configure IAM, secrets, and logging
     - Define least-privilege ECS task role: secretsmanager:GetSecretValue, bedrock:InvokeAgent, logs:PutLogEvents
     - Define Secrets Manager secrets for Slack tokens, Atlassian API token, GCP service account credentials, Bedrock Agent IDs
     - Define CloudWatch Log Group at /ecs/slack-agent-router with 90-day retention
     - _Requirements: 14.2, 14.3, 14.5_
 
-- [ ] 15. Final checkpoint - Ensure all tests pass
+- [ ] 18. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
