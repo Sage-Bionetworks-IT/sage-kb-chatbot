@@ -155,14 +155,14 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 9. Implement Slack Socket Mode application
-  - [ ] 9.1 Write tests for SlackAgentApp (RED)
+  - [x] 9.1 Write tests for SlackAgentApp (RED)
     - **Property 1: Event deduplication prevents reprocessing** — submitting the same event ID within 60s returns duplicate; unseen IDs are accepted
     - **Property 2: Bot mention prefix stripping** — for any text with bot mention prefix, the extracted question does not contain the prefix and preserves the rest
     - Unit tests: event parsing for app_mention, DM, and slash command; empty question rejection with ephemeral message; unauthorized user receives ephemeral rejection; rate-limited user receives ephemeral message
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 1.1, 1.2, 1.3, 1.5, 1.6, 2.2, 3.7, 10.5**
 
-  - [ ] 9.2 Implement SlackAgentApp with event handlers (GREEN)
+  - [x] 9.2 Implement SlackAgentApp with event handlers (GREEN)
     - Create `src/slack_agent_router/slack_app.py`
     - Initialize AsyncApp with bot_token and AsyncSocketModeHandler with app_token
     - Register handlers for app_mention, message (DM filtered by channel_type="im"), and /sage-ask slash command
@@ -171,7 +171,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Parse events into ParsedQuestion model
     - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-  - [ ] 9.3 Wire rate limiting, orchestrator, formatting, and error handling into event handlers (GREEN)
+  - [x] 9.3 Wire rate limiting, orchestrator, formatting, and error handling into event handlers (GREEN)
     - Check rate limits before dispatching (post ephemeral on limit exceeded)
     - Validate non-empty question text (post ephemeral hint for empty questions)
     - Call orchestrator.ask() and format response

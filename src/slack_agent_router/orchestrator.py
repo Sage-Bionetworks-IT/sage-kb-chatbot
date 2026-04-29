@@ -98,6 +98,7 @@ class BedrockAgentOrchestrator:
                 source_urls=[],
                 tool_calls_made=[],
                 latency_ms=_elapsed_ms(start),
+                failed=True,
             )
         except Exception as exc:
             logger.error("Unexpected error in ask(): %s", exc, exc_info=True)
@@ -106,6 +107,7 @@ class BedrockAgentOrchestrator:
                 source_urls=[],
                 tool_calls_made=[],
                 latency_ms=_elapsed_ms(start),
+                failed=True,
             )
 
     async def _ask_inner(self, question: str, session_id: str, start: float) -> AgentResponse:
@@ -314,6 +316,7 @@ class BedrockAgentOrchestrator:
                 source_urls=[],
                 tool_calls_made=tool_calls_made,
                 latency_ms=_elapsed_ms(start),
+                failed=True,
             )
 
         from slack_agent_router.formatter import format_fallback_answer
