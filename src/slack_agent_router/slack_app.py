@@ -41,7 +41,7 @@ class SlackAgentApp:
 
     The Bolt ``AsyncApp`` and ``AsyncSocketModeHandler`` are created
     lazily in ``start()`` because they require a running event loop.
-    All synchronous helpers (dedup, parsing, stripping) work without
+    All synchronous helpers (parsing, stripping) work without
     an event loop so they can be tested with Hypothesis.
 
     Required credentials:
@@ -74,6 +74,7 @@ class SlackAgentApp:
         # Populated lazily by start()
         self.app: Any | None = None
         self.handler: Any | None = None
+        self._bot_user_id: str | None = None
 
     # ------------------------------------------------------------------
     # Bot mention stripping
@@ -237,11 +238,9 @@ class SlackAgentApp:
             )
             return _AGENT_FAILURE_MSG
 
-        # The orchestrator never raises — it returns AgentResponse in all
-        # cases. But we still check for the "all backends failed" scenario
-        # by inspecting the response: if no tool calls were made and the
-        # answer matches the generic agent failure message, treat it as
-        # an all-backends-failed case.
+        # The orchestrator sets failed=True on the AgentResponse when it
+        # could not produce a useful answer. Check that flag to distinguish
+        # total failure from a legitimate direct answer with no tool calls.
         if self._is_all_backends_failed(response):
             return _ALL_BACKENDS_FAILED_MSG
 
@@ -258,12 +257,12 @@ class SlackAgentApp:
     def _is_all_backends_failed(response: AgentResponse) -> bool:
         """Detect the "all backends failed" scenario.
 
-        When the orchestrator fails before any tool calls succeed, it
-        returns an AgentResponse with empty tool_calls_made and no
-        source_urls. We use this structural check rather than matching
-        on the error message text.
+        The orchestrator sets ``failed=True`` on the AgentResponse when
+        it could not produce a useful answer (timeout, exception, or no
+        successful tool calls). This explicit flag avoids false positives
+        when the agent answers directly without tool calls.
         """
-        return not response.tool_calls_made and not response.source_urls
+        return response.failed
 
     @staticmethod
     async def _post_with_retry(
@@ -308,15 +307,36 @@ class SlackAgentApp:
 
     async def _handle_mention(self, event: dict[str, Any], say: Any, client: Any) -> None:
         """Handle @bot mentions in channels."""
-        bot_user_id = (await client.auth_test()).get("user_id", "")
+        bot_user_id = await self._get_bot_user_id(client)
         await self.handle_event(event, say=say, client=client, bot_user_id=bot_user_id)
 
     async def _handle_dm(self, event: dict[str, Any], say: Any, client: Any) -> None:
-        """Handle direct messages to the bot (channel_type='im' only)."""
+        """Handle direct messages to the bot (channel_type='im' only).
+
+        Ignores non-IM channels, message subtypes (edits, bot_message,
+        etc.), bot-authored messages, and the bot's own messages to
+        prevent reply loops.
+        """
         if event.get("channel_type") != "im":
             return
-        bot_user_id = (await client.auth_test()).get("user_id", "")
+        # Ignore message subtypes (edits, deletes, bot_message, etc.)
+        if event.get("subtype") is not None:
+            return
+        # Ignore messages from bots (including this bot's own replies)
+        if event.get("bot_id"):
+            return
+        bot_user_id = await self._get_bot_user_id(client)
+        # Ignore messages from the bot itself (belt-and-suspenders)
+        if event.get("user") == bot_user_id:
+            return
         await self.handle_event(event, say=say, client=client, bot_user_id=bot_user_id)
+
+    async def _get_bot_user_id(self, client: Any) -> str:
+        """Return the bot's user ID, fetching and caching it on first call."""
+        if self._bot_user_id is None:
+            result = await client.auth_test()
+            self._bot_user_id = result.get("user_id", "")
+        return self._bot_user_id
 
     async def _handle_slash_command(self, ack: Any, command: dict[str, Any], say: Any, client: Any) -> None:
         """Handle /sage-ask slash command.

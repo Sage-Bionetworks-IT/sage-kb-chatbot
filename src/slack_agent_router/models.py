@@ -52,6 +52,7 @@ class AgentResponse:
     source_urls: list[str]
     tool_calls_made: list[str]
     latency_ms: float
+    failed: bool = False
 
 
 @dataclass(frozen=True)
