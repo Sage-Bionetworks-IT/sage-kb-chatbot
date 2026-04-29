@@ -17,7 +17,7 @@ Validates: Requirements 1.1, 1.2, 1.3, 2.2, 3.7, 9.1, 9.2, 10.3, 10.4, 10.5, 10.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from hypothesis import given, settings
@@ -542,7 +542,7 @@ class TestOrchestratorErrorHandling:
 
     @pytest.mark.asyncio
     async def test_all_backends_failed_posts_specific_message(self, mock_auth_check) -> None:
-        """When orchestrator returns no tool calls and no sources, post all-backends-failed message."""
+        """When orchestrator returns failed=True, post all-backends-failed message."""
         orch = AsyncMock()
         orch.ask = AsyncMock(
             return_value=AgentResponse(
@@ -550,6 +550,7 @@ class TestOrchestratorErrorHandling:
                 source_urls=[],
                 tool_calls_made=[],
                 latency_ms=500.0,
+                failed=True,
             )
         )
 
@@ -577,7 +578,7 @@ class TestOrchestratorErrorHandling:
 
     @pytest.mark.asyncio
     async def test_successful_tool_calls_with_failure_answer_not_treated_as_all_failed(self, mock_auth_check) -> None:
-        """When orchestrator made tool calls, even with no sources, it's not all-backends-failed."""
+        """When orchestrator returns failed=False with tool calls, it's not all-backends-failed."""
         orch = AsyncMock()
         orch.ask = AsyncMock(
             return_value=AgentResponse(
@@ -585,6 +586,7 @@ class TestOrchestratorErrorHandling:
                 source_urls=[],
                 tool_calls_made=["SearchConfluenceJira"],
                 latency_ms=500.0,
+                failed=False,
             )
         )
 
@@ -634,7 +636,8 @@ class TestSlack429Retry:
             if call_count == 1:
                 raise error_429
 
-        await SlackAgentApp._post_with_retry(flaky_say, text="hello", thread_ts="123")
+        with patch("slack_agent_router.slack_app.asyncio.sleep", new_callable=AsyncMock):
+            await SlackAgentApp._post_with_retry(flaky_say, text="hello", thread_ts="123")
         assert call_count == 2
 
     @pytest.mark.asyncio
@@ -660,8 +663,9 @@ class TestSlack429Retry:
             call_count += 1
             raise error_429
 
-        with pytest.raises(Exception, match="rate_limited"):
-            await SlackAgentApp._post_with_retry(always_429, text="hello")
+        with patch("slack_agent_router.slack_app.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(Exception, match="rate_limited"):
+                await SlackAgentApp._post_with_retry(always_429, text="hello")
 
         # 1 initial + 3 retries = 4 total
         assert call_count == 4
