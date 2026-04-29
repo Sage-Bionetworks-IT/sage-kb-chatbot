@@ -123,8 +123,8 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run tests from 6.1 — all must pass
     - _Requirements: 8.1, 8.2, 8.3_
 
-- [ ] 7. Implement Bedrock Agent orchestrator
-  - [ ] 7.1 Write tests for orchestrator (RED)
+- [x] 7. Implement Bedrock Agent orchestrator
+  - [x] 7.1 Write tests for orchestrator (RED)
     - **Property 6: Return control loop iteration bound** — the orchestrator executes at most 5 iterations regardless of agent behavior
     - **Property 7: Return control loop duplicate tool call detection** — duplicate (action_group, parameters) pairs are skipped and cached results reused
     - **Property 8: Action group to backend mapping correctness** — SearchConfluenceJira maps to Rovo_Backend, SearchGoogleSites maps to Vertex_Backend
@@ -133,7 +133,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 5.3, 5.4, 5.5, 5.6, 5.7, 6.1, 6.2, 6.3, 10.6, 10.7**
 
-  - [ ] 7.2 Implement BedrockAgentOrchestrator (GREEN)
+  - [x] 7.2 Implement BedrockAgentOrchestrator (GREEN)
     - Create `src/slack_agent_router/orchestrator.py`
     - Implement ask() method with the return control loop: invoke agent → receive tool requests → execute locally → send results back → repeat until final answer
     - Map action group names to backends: SearchConfluenceJira → RovoMCPBackend, SearchGoogleSites → VertexAISearchBackend
@@ -146,7 +146,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Cache successful ToolOutputs for fallback on agent failure
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 10.7_
 
-  - [ ] 7.3 Implement session ID derivation (GREEN)
+  - [x] 7.3 Implement session ID derivation (GREEN)
     - Implement session_id logic: thread reply → "{channel_id}:{thread_ts}", channel mention → "{channel_id}:{message_ts}", DM → "{channel_id}:{message_ts}"
     - Run all tests from 7.1 — all must pass
     - _Requirements: 6.1, 6.2, 6.3_
