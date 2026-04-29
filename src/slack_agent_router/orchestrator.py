@@ -207,7 +207,19 @@ class BedrockAgentOrchestrator:
 
         This method is designed to be patched in tests. In production,
         it calls bedrock-agent-runtime InvokeAgent.
+
+        The synchronous boto3 call is offloaded to a thread so it
+        doesn't block the event loop.
         """
+        return await asyncio.to_thread(self._invoke_agent_sync, question, session_id, return_control_results)
+
+    def _invoke_agent_sync(
+        self,
+        question: str,
+        session_id: str,
+        return_control_results: list[dict] | None = None,
+    ) -> dict:
+        """Synchronous boto3 InvokeAgent call (runs in a worker thread)."""
         import boto3
 
         client = boto3.client("bedrock-agent-runtime")
@@ -261,7 +273,7 @@ class BedrockAgentOrchestrator:
                 success=False,
                 content="",
                 sources=[],
-                error_message=f"Backend error: {exc}",
+                error_message=f"Backend {action_group} is temporarily unavailable",
             )
 
         return _backend_result_to_tool_output(result)
@@ -331,6 +343,7 @@ class BedrockAgentOrchestrator:
             body["error"] = tool_output.error_message
 
         return {
+            "invocationId": invocation_id,
             "functionResult": {
                 "actionGroup": action_group,
                 "function": function_name,
