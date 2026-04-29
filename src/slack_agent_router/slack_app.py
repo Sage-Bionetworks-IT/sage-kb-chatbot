@@ -19,12 +19,9 @@ from typing import Any
 
 from slack_agent_router.formatter import format_answer
 from slack_agent_router.models import AgentResponse, ParsedQuestion
-from slack_agent_router.sanitize import strip_slack_formatting
+from slack_agent_router.sanitize import sanitize_backend_response, strip_slack_formatting
 
 logger = logging.getLogger(__name__)
-
-# TTL for event deduplication (seconds).
-_DEDUP_TTL = 60
 
 # Slack 429 retry configuration.
 _SLACK_MAX_RETRIES = 3
@@ -77,36 +74,9 @@ class SlackAgentApp:
         self._rate_limiter = rate_limiter
         self._auth_check = auth_check
         self._clock = clock or time.monotonic
-        self._seen_events: dict[str, float] = {}
         # Populated lazily by start()
         self.app: Any | None = None
         self.handler: Any | None = None
-
-    # ------------------------------------------------------------------
-    # Event deduplication
-    # ------------------------------------------------------------------
-
-    def is_duplicate(self, event_id: str) -> bool:
-        """Check if an event ID was already seen within the TTL window.
-
-        Returns True if duplicate, False if new. Registers the ID
-        on first call so subsequent calls within the TTL return True.
-        """
-        now = self._clock()
-        self._evict_expired(now)
-
-        if event_id in self._seen_events:
-            return True
-
-        self._seen_events[event_id] = now
-        return False
-
-    def _evict_expired(self, now: float) -> None:
-        """Remove event IDs older than the TTL."""
-        cutoff = now - _DEDUP_TTL
-        expired = [eid for eid, ts in self._seen_events.items() if ts <= cutoff]
-        for eid in expired:
-            del self._seen_events[eid]
 
     # ------------------------------------------------------------------
     # Bot mention stripping
@@ -167,29 +137,34 @@ class SlackAgentApp:
         )
 
     # ------------------------------------------------------------------
-    # Core event handler (shared logic)
+    # Core pipeline (shared by event handlers and slash commands)
     # ------------------------------------------------------------------
 
-    async def handle_event(
+    async def _process_question(
         self,
-        event: dict[str, Any],
+        parsed: ParsedQuestion,
         *,
         say: Any,
         client: Any,
-        bot_user_id: str,
+        thread_ts: str | None = None,
     ) -> None:
-        """Process a Slack event through the full pipeline.
+        """Run the full question pipeline on a ParsedQuestion.
 
-        Pipeline order: parse → empty check → auth → rate limit → orchestrate → respond.
+        Pipeline: empty check → auth → rate limit → orchestrate → respond.
         Posts ephemeral messages for empty questions, unauthorized users,
         and rate-limited users. Dispatches valid questions to the orchestrator.
 
         Rate limiter acquire/release brackets the orchestrator call so
         in-flight tracking is accurate. Slack 429 errors are retried
         with exponential backoff.
-        """
-        parsed = self.parse_event(event, bot_user_id)
 
+        Args:
+            parsed: The normalized question from any Slack input method.
+            say: Slack Bolt ``say`` callable for posting messages.
+            client: Slack Web API client for ephemeral messages.
+            thread_ts: Thread timestamp for reply threading. When None
+                       (e.g. slash commands), the reply is not threaded.
+        """
         # Empty question check
         if not parsed.question.strip():
             await client.chat_postEphemeral(
@@ -225,17 +200,28 @@ class SlackAgentApp:
         if self._rate_limiter is not None:
             self._rate_limiter.acquire(parsed.user_id)
 
-        thread_ts = parsed.thread_ts or parsed.event_ts
-
         try:
-            response = await self._dispatch_and_format(parsed, thread_ts)
+            response = await self._dispatch_and_format(parsed)
         finally:
             if self._rate_limiter is not None:
                 self._rate_limiter.release(parsed.user_id)
 
         await self._post_with_retry(say, text=response, thread_ts=thread_ts)
 
-    async def _dispatch_and_format(self, parsed: ParsedQuestion, thread_ts: str) -> str:
+    async def handle_event(
+        self,
+        event: dict[str, Any],
+        *,
+        say: Any,
+        client: Any,
+        bot_user_id: str,
+    ) -> None:
+        """Parse a Slack event and run it through the shared pipeline."""
+        parsed = self.parse_event(event, bot_user_id)
+        thread_ts = parsed.thread_ts or parsed.event_ts
+        await self._process_question(parsed, say=say, client=client, thread_ts=thread_ts)
+
+    async def _dispatch_and_format(self, parsed: ParsedQuestion) -> str:
         """Call the orchestrator and return a formatted Slack mrkdwn string.
 
         Handles orchestrator exceptions and returns appropriate error
@@ -263,7 +249,13 @@ class SlackAgentApp:
             return _ALL_BACKENDS_FAILED_MSG
 
         elapsed_seconds = response.latency_ms / 1000.0
-        return format_answer(response, elapsed_seconds)
+        sanitized = AgentResponse(
+            answer=sanitize_backend_response(response.answer),
+            source_urls=response.source_urls,
+            tool_calls_made=response.tool_calls_made,
+            latency_ms=response.latency_ms,
+        )
+        return format_answer(sanitized, elapsed_seconds)
 
     @staticmethod
     def _is_all_backends_failed(response: AgentResponse) -> bool:
@@ -287,7 +279,9 @@ class SlackAgentApp:
         """Post a message via ``say()``, retrying on Slack 429 errors.
 
         Retries up to ``_SLACK_MAX_RETRIES`` times with exponential
-        backoff, respecting the ``Retry-After`` header when available.
+        backoff. The delay is ``max(Retry-After, base * 2^attempt)``
+        where base is ``_SLACK_DEFAULT_RETRY_AFTER``, so we always
+        respect the server's requested delay while still backing off.
         """
         for attempt in range(_SLACK_MAX_RETRIES + 1):
             try:
@@ -299,13 +293,15 @@ class SlackAgentApp:
             except Exception as exc:
                 retry_after = _extract_retry_after(exc)
                 if retry_after is not None and attempt < _SLACK_MAX_RETRIES:
+                    exponential_delay = _SLACK_DEFAULT_RETRY_AFTER * (2**attempt)
+                    delay = max(retry_after, exponential_delay)
                     logger.warning(
                         "Slack 429 on attempt %d/%d — retrying in %.1fs",
                         attempt + 1,
                         _SLACK_MAX_RETRIES + 1,
-                        retry_after,
+                        delay,
                     )
-                    await asyncio.sleep(retry_after)
+                    await asyncio.sleep(delay)
                     continue
                 # Not a 429 or exhausted retries — re-raise
                 raise
@@ -329,50 +325,11 @@ class SlackAgentApp:
     async def _handle_slash_command(self, ack: Any, command: dict[str, Any], say: Any, client: Any) -> None:
         """Handle /sage-ask slash command.
 
-        Acknowledges within 3 seconds, then processes asynchronously.
+        Acknowledges within 3 seconds, then processes via the shared pipeline.
         """
         await ack()
         parsed = self.parse_command(command)
-
-        if not parsed.question.strip():
-            await client.chat_postEphemeral(
-                channel=parsed.channel_id,
-                user=parsed.user_id,
-                text=_EMPTY_QUESTION_HINT,
-            )
-            return
-
-        if self._auth_check is not None:
-            authorized = await self._auth_check(parsed.user_id)
-            if not authorized:
-                await client.chat_postEphemeral(
-                    channel=parsed.channel_id,
-                    user=parsed.user_id,
-                    text=_UNAUTHORIZED_MSG,
-                )
-                return
-
-        if self._rate_limiter is not None:
-            allowed, reason = self._rate_limiter.check(parsed.user_id)
-            if not allowed:
-                await client.chat_postEphemeral(
-                    channel=parsed.channel_id,
-                    user=parsed.user_id,
-                    text=reason,
-                )
-                return
-
-        # Acquire rate limiter slot
-        if self._rate_limiter is not None:
-            self._rate_limiter.acquire(parsed.user_id)
-
-        try:
-            response = await self._dispatch_and_format(parsed, thread_ts=None)
-        finally:
-            if self._rate_limiter is not None:
-                self._rate_limiter.release(parsed.user_id)
-
-        await self._post_with_retry(say, text=response)
+        await self._process_question(parsed, say=say, client=client)
 
     # ------------------------------------------------------------------
     # Session ID derivation
