@@ -40,6 +40,7 @@ _VERTEX_LOCATION_ENV = "VERTEX_LOCATION"
 _VERTEX_DATA_STORE_ID_ENV = "VERTEX_DATA_STORE_ID"
 _BEDROCK_AGENT_ID_ENV = "BEDROCK_AGENT_ID"
 _BEDROCK_AGENT_ALIAS_ID_ENV = "BEDROCK_AGENT_ALIAS_ID"
+_SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"
 
 # Maps AppConfig field name → environment variable name.
 _ENV_MAP: dict[str, str] = {
@@ -50,6 +51,7 @@ _ENV_MAP: dict[str, str] = {
     "vertex_data_store_id": _VERTEX_DATA_STORE_ID_ENV,
     "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
     "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
+    "secret_id": _SECRET_ID_ENV,
 }
 
 
@@ -64,6 +66,7 @@ class AppConfig:
     vertex_data_store_id: str
     bedrock_agent_id: str
     bedrock_agent_alias_id: str
+    secret_id: str
 
 
 def load_config(config_path: str | None = None) -> AppConfig:
@@ -90,6 +93,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
     * ``VERTEX_DATA_STORE_ID``   — Vertex AI Search data store ID
     * ``BEDROCK_AGENT_ID``       — Amazon Bedrock Agent ID
     * ``BEDROCK_AGENT_ALIAS_ID`` — Amazon Bedrock Agent alias ID
+    * ``SLACK_AGENT_ROUTER_SECRET_ID`` — Secrets Manager secret name or ARN
 
     Raises:
         RuntimeError: If any required config value is missing after
@@ -204,10 +208,8 @@ def _parse_yaml(text: str, path: str) -> dict[str, Any]:
 # Secrets loading (sensitive credentials from Secrets Manager)
 # ------------------------------------------------------------------
 
-_SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"
 
-
-async def load_secrets(secret_id: str | None = None) -> dict[str, Any]:
+async def load_secrets(secret_id: str) -> dict[str, Any]:
     """Load sensitive credentials from AWS Secrets Manager.
 
     The secret is expected to be a JSON object with the following keys:
@@ -218,24 +220,18 @@ async def load_secrets(secret_id: str | None = None) -> dict[str, Any]:
     * ``gcp_service_account``  — GCP service account credentials (JSON object)
 
     Args:
-        secret_id: Secrets Manager secret name or ARN.  Falls back to
-            the ``SLACK_AGENT_ROUTER_SECRET_ID`` environment variable.
+        secret_id: Secrets Manager secret name or ARN. Typically
+            comes from ``AppConfig.secret_id``.
 
     Returns:
         Parsed secret as a dictionary.
 
     Raises:
-        RuntimeError: If the secret ID is not configured or the secret
-            cannot be retrieved.
+        RuntimeError: If the secret cannot be retrieved or parsed.
     """
-    resolved_id = secret_id or os.environ.get(_SECRET_ID_ENV)
-    if not resolved_id:
-        raise RuntimeError(
-            f"Secret ID not configured. Set the {_SECRET_ID_ENV} environment variable or pass secret_id explicitly."
-        )
 
     try:
-        raw = await asyncio.to_thread(_get_secret_value, resolved_id)
+        raw = await asyncio.to_thread(_get_secret_value, secret_id)
     except Exception as exc:
         raise RuntimeError(f"Failed to load secrets from Secrets Manager: {exc}") from exc
 
@@ -324,7 +320,7 @@ async def main() -> None:
     logger.info('"Starting Slack Agent Router"')
 
     config = load_config()
-    secrets = await load_secrets()
+    secrets = await load_secrets(config.secret_id)
 
     # --- Backends ---------------------------------------------------
     from slack_agent_router.backends.rovo import RovoMCPBackend

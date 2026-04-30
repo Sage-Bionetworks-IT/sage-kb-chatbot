@@ -9,3 +9,4 @@ vertex_location: global
 vertex_data_store_id: your-data-store-id
 bedrock_agent_id: your-agent-id
 bedrock_agent_alias_id: your-alias-id
+secret_id: slack-agent-router/dev

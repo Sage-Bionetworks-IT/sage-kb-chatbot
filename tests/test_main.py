@@ -42,6 +42,7 @@ _CONFIG_ENV_VARS = {
     _VERTEX_DATA_STORE_ID_ENV: "ds-456",
     _BEDROCK_AGENT_ID_ENV: "agent-789",
     _BEDROCK_AGENT_ALIAS_ID_ENV: "alias-abc",
+    _SECRET_ID_ENV: "test-secret-arn",
 }
 
 _CONFIG_FILE_VALUES = {
@@ -52,6 +53,7 @@ _CONFIG_FILE_VALUES = {
     "vertex_data_store_id": "ds-456",
     "bedrock_agent_id": "agent-789",
     "bedrock_agent_alias_id": "alias-abc",
+    "secret_id": "test-secret-arn",
 }
 
 
@@ -122,7 +124,8 @@ class TestValidateRequiredSecretKeys:
 class TestLoadConfigEnvOnly:
     """Tests for loading config purely from environment variables."""
 
-    def test_loads_all_config_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_loads_all_config_values(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.chdir(tmp_path)
         _set_config_env(monkeypatch)
         config = load_config()
         assert config.rovo_mcp_server_url == "https://mcp.atlassian.com/v1/mcp"
@@ -145,19 +148,22 @@ class TestLoadConfigEnvOnly:
             _BEDROCK_AGENT_ALIAS_ID_ENV,
         ],
     )
-    def test_missing_env_var_raises(self, monkeypatch: pytest.MonkeyPatch, env_var: str) -> None:
+    def test_missing_env_var_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env_var: str) -> None:
+        monkeypatch.chdir(tmp_path)
         _set_config_env(monkeypatch)
         monkeypatch.delenv(env_var)
         with pytest.raises(RuntimeError, match="Missing required configuration"):
             load_config()
 
-    def test_empty_env_var_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_empty_env_var_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.chdir(tmp_path)
         _set_config_env(monkeypatch)
         monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "  ")
         with pytest.raises(RuntimeError, match=_BEDROCK_AGENT_ID_ENV):
             load_config()
 
-    def test_config_is_frozen(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_config_is_frozen(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.chdir(tmp_path)
         _set_config_env(monkeypatch)
         config = load_config()
         with pytest.raises(AttributeError):
@@ -229,6 +235,7 @@ class TestLoadConfigYamlFile:
             vertex_data_store_id: ds-456
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
+            secret_id: test-secret-arn
         """)
         )
 
@@ -247,6 +254,7 @@ class TestLoadConfigYamlFile:
             vertex_data_store_id: ds-456
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
+            secret_id: test-secret-arn
         """)
         )
 
@@ -265,6 +273,7 @@ class TestLoadConfigYamlFile:
             vertex_data_store_id: ds-456
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
+            secret_id: test-secret-arn
         """)
         )
 
@@ -327,8 +336,9 @@ class TestLoadConfigFileResolution:
         with pytest.raises(RuntimeError, match="Config file not found"):
             load_config()
 
-    def test_no_file_no_env_raises_for_missing_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_no_file_no_env_raises_for_missing_values(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """With no file and no env vars, all values are missing."""
+        monkeypatch.chdir(tmp_path)
         _clear_config_env(monkeypatch)
         with pytest.raises(RuntimeError, match="Missing required configuration"):
             load_config()
@@ -348,6 +358,7 @@ class TestLoadConfigFileResolution:
         monkeypatch.setenv(_VERTEX_DATA_STORE_ID_ENV, "ds-env")
         monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "agent-env")
         monkeypatch.setenv(_BEDROCK_AGENT_ALIAS_ID_ENV, "alias-env")
+        monkeypatch.setenv(_SECRET_ID_ENV, "test-secret-arn")
 
         config = load_config(config_path=str(config_file))
         assert config.atlassian_cloud_id == "from-file"
@@ -371,21 +382,6 @@ class TestLoadSecrets:
 
         assert result["slack_bot_token"] == "xoxb-test-token"
         assert result["atlassian_api_token"] == "atlassian-token"
-
-    async def test_falls_back_to_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(_SECRET_ID_ENV, "env-secret-id")
-        secrets_dict = _make_secrets()
-        raw_json = json.dumps(secrets_dict)
-
-        with patch("slack_agent_router.main._get_secret_value", return_value=raw_json) as mock_get:
-            await load_secrets()
-
-        mock_get.assert_called_once_with("env-secret-id")
-
-    async def test_raises_when_no_secret_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv(_SECRET_ID_ENV, raising=False)
-        with pytest.raises(RuntimeError, match="Secret ID not configured"):
-            await load_secrets()
 
     async def test_raises_on_secrets_manager_error(self) -> None:
         with patch("slack_agent_router.main._get_secret_value", side_effect=Exception("AWS error")):
