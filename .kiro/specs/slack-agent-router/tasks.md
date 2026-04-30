@@ -180,8 +180,8 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run all tests from 9.1 — all must pass
     - _Requirements: 3.7, 9.1, 9.2, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7_
 
-- [ ] 10. Implement application entrypoint for end-to-end testing
-  - [ ] 10.1 Implement main.py entrypoint
+- [x] 10. Implement application entrypoint for end-to-end testing
+  - [x] 10.1 Implement main.py entrypoint
     - Create `src/slack_agent_router/main.py`
     - Load secrets from AWS Secrets Manager
     - Initialize all components: backends, orchestrator, rate limiter, SlackAgentApp, HealthCheck
