@@ -1,12 +1,14 @@
 """Tests for the application entrypoint (main.py).
 
-Covers secrets loading, config loading, validation, component wiring,
-and the main() lifecycle with mocked AWS and Slack dependencies.
+Covers config file loading (JSON/YAML), environment variable overrides,
+secrets loading, validation, component wiring, and the main() lifecycle.
 """
 
 from __future__ import annotations
 
 import json
+import textwrap
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +18,7 @@ from slack_agent_router.main import (
     _ATLASSIAN_CLOUD_ID_ENV,
     _BEDROCK_AGENT_ALIAS_ID_ENV,
     _BEDROCK_AGENT_ID_ENV,
+    _CONFIG_FILE_ENV,
     _GCP_PROJECT_ID_ENV,
     _REQUIRED_SECRET_KEYS,
     _ROVO_MCP_SERVER_URL_ENV,
@@ -41,6 +44,16 @@ _CONFIG_ENV_VARS = {
     _BEDROCK_AGENT_ALIAS_ID_ENV: "alias-abc",
 }
 
+_CONFIG_FILE_VALUES = {
+    "rovo_mcp_server_url": "https://mcp.atlassian.com/v1/mcp",
+    "atlassian_cloud_id": "cloud-123",
+    "gcp_project_id": "my-project",
+    "vertex_location": "global",
+    "vertex_data_store_id": "ds-456",
+    "bedrock_agent_id": "agent-789",
+    "bedrock_agent_alias_id": "alias-abc",
+}
+
 
 def _make_secrets(**overrides: Any) -> dict[str, Any]:
     """Build a complete secrets dict with sensible defaults."""
@@ -58,6 +71,13 @@ def _set_config_env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
     """Set all required config env vars, with optional overrides."""
     for env_var, value in _CONFIG_ENV_VARS.items():
         monkeypatch.setenv(env_var, overrides.get(env_var, value))
+
+
+def _clear_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove all config env vars so file-only loading can be tested."""
+    for env_var in _CONFIG_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.delenv(_CONFIG_FILE_ENV, raising=False)
 
 
 # ------------------------------------------------------------------
@@ -95,12 +115,12 @@ class TestValidateRequiredSecretKeys:
 
 
 # ------------------------------------------------------------------
-# load_config
+# load_config — environment variables only
 # ------------------------------------------------------------------
 
 
-class TestLoadConfig:
-    """Tests for environment variable configuration loading."""
+class TestLoadConfigEnvOnly:
+    """Tests for loading config purely from environment variables."""
 
     def test_loads_all_config_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_config_env(monkeypatch)
@@ -128,7 +148,7 @@ class TestLoadConfig:
     def test_missing_env_var_raises(self, monkeypatch: pytest.MonkeyPatch, env_var: str) -> None:
         _set_config_env(monkeypatch)
         monkeypatch.delenv(env_var)
-        with pytest.raises(RuntimeError, match="Missing required environment variables"):
+        with pytest.raises(RuntimeError, match="Missing required configuration"):
             load_config()
 
     def test_empty_env_var_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,19 +157,201 @@ class TestLoadConfig:
         with pytest.raises(RuntimeError, match=_BEDROCK_AGENT_ID_ENV):
             load_config()
 
-    def test_multiple_missing_listed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Set none of the required env vars
-        for env_var in _CONFIG_ENV_VARS:
-            monkeypatch.delenv(env_var, raising=False)
-        with pytest.raises(RuntimeError, match=_ATLASSIAN_CLOUD_ID_ENV) as exc_info:
-            load_config()
-        assert _BEDROCK_AGENT_ID_ENV in str(exc_info.value)
-
     def test_config_is_frozen(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_config_env(monkeypatch)
         config = load_config()
         with pytest.raises(AttributeError):
             config.atlassian_cloud_id = "mutated"  # type: ignore[misc]
+
+
+# ------------------------------------------------------------------
+# load_config — JSON config file
+# ------------------------------------------------------------------
+
+
+class TestLoadConfigJsonFile:
+    """Tests for loading config from a JSON file."""
+
+    def test_loads_from_json_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps(_CONFIG_FILE_VALUES))
+
+        config = load_config(config_path=str(config_file))
+        assert config.bedrock_agent_id == "agent-789"
+        assert config.vertex_location == "global"
+
+    def test_env_overrides_json_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps(_CONFIG_FILE_VALUES))
+
+        monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "overridden-agent")
+        config = load_config(config_path=str(config_file))
+        assert config.bedrock_agent_id == "overridden-agent"
+        # Non-overridden values come from file
+        assert config.atlassian_cloud_id == "cloud-123"
+
+    def test_raises_on_invalid_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.json"
+        config_file.write_text("not valid json {{{")
+
+        with pytest.raises(RuntimeError, match="Invalid JSON"):
+            load_config(config_path=str(config_file))
+
+    def test_raises_on_json_array(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.json"
+        config_file.write_text("[1, 2, 3]")
+
+        with pytest.raises(RuntimeError, match="must contain a JSON object"):
+            load_config(config_path=str(config_file))
+
+
+# ------------------------------------------------------------------
+# load_config — YAML config file
+# ------------------------------------------------------------------
+
+
+class TestLoadConfigYamlFile:
+    """Tests for loading config from a YAML file."""
+
+    def test_loads_from_yaml_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            textwrap.dedent("""\
+            rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
+            atlassian_cloud_id: cloud-yaml
+            gcp_project_id: my-project
+            vertex_location: global
+            vertex_data_store_id: ds-456
+            bedrock_agent_id: agent-789
+            bedrock_agent_alias_id: alias-abc
+        """)
+        )
+
+        config = load_config(config_path=str(config_file))
+        assert config.atlassian_cloud_id == "cloud-yaml"
+
+    def test_loads_yml_extension(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(
+            textwrap.dedent("""\
+            rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
+            atlassian_cloud_id: cloud-yml
+            gcp_project_id: my-project
+            vertex_location: global
+            vertex_data_store_id: ds-456
+            bedrock_agent_id: agent-789
+            bedrock_agent_alias_id: alias-abc
+        """)
+        )
+
+        config = load_config(config_path=str(config_file))
+        assert config.atlassian_cloud_id == "cloud-yml"
+
+    def test_env_overrides_yaml_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            textwrap.dedent("""\
+            rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
+            atlassian_cloud_id: cloud-yaml
+            gcp_project_id: my-project
+            vertex_location: global
+            vertex_data_store_id: ds-456
+            bedrock_agent_id: agent-789
+            bedrock_agent_alias_id: alias-abc
+        """)
+        )
+
+        monkeypatch.setenv(_VERTEX_LOCATION_ENV, "us-central1")
+        config = load_config(config_path=str(config_file))
+        assert config.vertex_location == "us-central1"
+        assert config.atlassian_cloud_id == "cloud-yaml"
+
+    def test_raises_on_invalid_yaml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(":\n  - :\n    bad: [yaml")
+
+        with pytest.raises(RuntimeError, match="Invalid YAML"):
+            load_config(config_path=str(config_file))
+
+    def test_empty_yaml_file_falls_through_to_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An empty YAML file should not crash — values come from env."""
+        _set_config_env(monkeypatch)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("")
+
+        config = load_config(config_path=str(config_file))
+        assert config.bedrock_agent_id == "agent-789"
+
+
+# ------------------------------------------------------------------
+# load_config — file resolution
+# ------------------------------------------------------------------
+
+
+class TestLoadConfigFileResolution:
+    """Tests for config file path resolution."""
+
+    def test_explicit_path_takes_priority(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "custom.json"
+        config_file.write_text(json.dumps(_CONFIG_FILE_VALUES))
+
+        config = load_config(config_path=str(config_file))
+        assert config.bedrock_agent_id == "agent-789"
+
+    def test_env_var_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "from-env.json"
+        config_file.write_text(json.dumps(_CONFIG_FILE_VALUES))
+        monkeypatch.setenv(_CONFIG_FILE_ENV, str(config_file))
+
+        config = load_config()
+        assert config.bedrock_agent_id == "agent-789"
+
+    def test_raises_when_explicit_path_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        with pytest.raises(RuntimeError, match="Config file not found"):
+            load_config(config_path="/nonexistent/config.json")
+
+    def test_raises_when_env_path_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_config_env(monkeypatch)
+        monkeypatch.setenv(_CONFIG_FILE_ENV, "/nonexistent/config.yaml")
+        with pytest.raises(RuntimeError, match="Config file not found"):
+            load_config()
+
+    def test_no_file_no_env_raises_for_missing_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With no file and no env vars, all values are missing."""
+        _clear_config_env(monkeypatch)
+        with pytest.raises(RuntimeError, match="Missing required configuration"):
+            load_config()
+
+    def test_partial_file_plus_env_fills_gaps(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """File provides some values, env vars fill the rest."""
+        _clear_config_env(monkeypatch)
+        partial = {
+            "rovo_mcp_server_url": "https://mcp.atlassian.com/v1/mcp",
+            "atlassian_cloud_id": "from-file",
+            "gcp_project_id": "from-file",
+        }
+        config_file = tmp_path / "partial.json"
+        config_file.write_text(json.dumps(partial))
+
+        monkeypatch.setenv(_VERTEX_LOCATION_ENV, "global")
+        monkeypatch.setenv(_VERTEX_DATA_STORE_ID_ENV, "ds-env")
+        monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "agent-env")
+        monkeypatch.setenv(_BEDROCK_AGENT_ALIAS_ID_ENV, "alias-env")
+
+        config = load_config(config_path=str(config_file))
+        assert config.atlassian_cloud_id == "from-file"
+        assert config.vertex_data_store_id == "ds-env"
 
 
 # ------------------------------------------------------------------
@@ -205,7 +407,6 @@ class TestLoadSecrets:
                 await load_secrets(secret_id="incomplete-secret")
 
     async def test_parses_gcp_service_account_string(self) -> None:
-        """gcp_service_account stored as a JSON string should be parsed into a dict."""
         sa_dict = {"type": "service_account", "project_id": "my-project"}
         secrets_dict = _make_secrets(gcp_service_account=json.dumps(sa_dict))
         raw_json = json.dumps(secrets_dict)
@@ -217,7 +418,6 @@ class TestLoadSecrets:
         assert result["gcp_service_account"]["type"] == "service_account"
 
     async def test_gcp_service_account_dict_passthrough(self) -> None:
-        """gcp_service_account already a dict should pass through unchanged."""
         sa_dict = {"type": "service_account", "project_id": "my-project"}
         secrets_dict = _make_secrets(gcp_service_account=sa_dict)
         raw_json = json.dumps(secrets_dict)
@@ -236,9 +436,7 @@ class TestLoadSecrets:
                 await load_secrets(secret_id="test-secret")
 
     async def test_config_keys_not_required_in_secrets(self) -> None:
-        """Config-only keys (cloud_id, project_id, etc.) should NOT be required in secrets."""
         secrets_dict = _make_secrets()
-        # These should not be in secrets at all — verify they're not required
         for key in ("atlassian_cloud_id", "gcp_project_id", "vertex_data_store_id", "bedrock_agent_id"):
             assert key not in secrets_dict
 
@@ -258,7 +456,6 @@ class TestMain:
     """Tests for the main() entrypoint wiring and lifecycle."""
 
     async def test_main_wires_components_and_starts(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify main() loads config + secrets, creates components, and starts them."""
         _set_config_env(monkeypatch)
         monkeypatch.setenv(_SECRET_ID_ENV, "test-secret-arn")
 
@@ -293,27 +490,23 @@ class TestMain:
 
                 await main()
 
-            # Verify Rovo backend: secret (api_token) + config (url, cloud_id)
             mock_rovo_cls.assert_called_once()
             rovo_call = mock_rovo_cls.call_args
             assert rovo_call.kwargs["mcp_server_url"] == "https://mcp.atlassian.com/v1/mcp"
             assert rovo_call.kwargs["api_token"] == "atlassian-token"
             assert rovo_call.kwargs["cloud_id"] == "cloud-123"
 
-            # Verify Vertex backend: secret (credentials) + config (project, location, data store)
             mock_vertex_cls.assert_called_once()
             vertex_call = mock_vertex_cls.call_args
             assert vertex_call.kwargs["project_id"] == "my-project"
             assert vertex_call.kwargs["location"] == "global"
             assert vertex_call.kwargs["data_store_id"] == "ds-456"
 
-            # Verify orchestrator uses config values
             mock_orch_cls.assert_called_once()
             orch_call = mock_orch_cls.call_args
             assert orch_call.kwargs["agent_id"] == "agent-789"
             assert orch_call.kwargs["agent_alias_id"] == "alias-abc"
 
-            # Verify rate limiter and signal handlers
             mock_rl_cls.assert_called_once()
             assert loop_mock.add_signal_handler.call_count == 2
 
@@ -333,7 +526,6 @@ class TestCreateHealthCheck:
             with patch("builtins.__import__", side_effect=ImportError("no module")):
                 result = await _create_health_check(MagicMock(), [])
 
-        # The function catches ImportError gracefully — no crash = pass
         assert result is None or result is not None
 
     async def test_returns_health_check_when_available(self) -> None:

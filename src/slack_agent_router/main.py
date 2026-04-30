@@ -1,12 +1,13 @@
 """Application entrypoint for the Slack Agent Router.
 
-Loads secrets from AWS Secrets Manager, reads configuration from
-environment variables, initialises all components, and starts the
-health check server and Socket Mode listener concurrently on a
-single asyncio event loop.
+Loads secrets from AWS Secrets Manager, reads configuration from a
+JSON/YAML file (with environment variable overrides), initialises
+all components, and starts the health check server and Socket Mode
+listener concurrently on a single asyncio event loop.
 
 Secrets (sensitive credentials) live in Secrets Manager.
-Configuration (non-sensitive identifiers) live in environment variables.
+Configuration (non-sensitive identifiers) live in a config file
+and/or environment variables. Env vars override file values.
 
 Requirements: 14.5
 """
@@ -26,8 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
-# Configuration (non-sensitive, from environment variables)
+# Configuration (non-sensitive, from file + environment overrides)
 # ------------------------------------------------------------------
+
+_CONFIG_FILE_ENV = "SLACK_AGENT_ROUTER_CONFIG"
+_DEFAULT_CONFIG_PATHS = ("config.yaml", "config.json")
 
 _ROVO_MCP_SERVER_URL_ENV = "ROVO_MCP_SERVER_URL"
 _ATLASSIAN_CLOUD_ID_ENV = "ATLASSIAN_CLOUD_ID"
@@ -37,10 +41,21 @@ _VERTEX_DATA_STORE_ID_ENV = "VERTEX_DATA_STORE_ID"
 _BEDROCK_AGENT_ID_ENV = "BEDROCK_AGENT_ID"
 _BEDROCK_AGENT_ALIAS_ID_ENV = "BEDROCK_AGENT_ALIAS_ID"
 
+# Maps AppConfig field name → environment variable name.
+_ENV_MAP: dict[str, str] = {
+    "rovo_mcp_server_url": _ROVO_MCP_SERVER_URL_ENV,
+    "atlassian_cloud_id": _ATLASSIAN_CLOUD_ID_ENV,
+    "gcp_project_id": _GCP_PROJECT_ID_ENV,
+    "vertex_location": _VERTEX_LOCATION_ENV,
+    "vertex_data_store_id": _VERTEX_DATA_STORE_ID_ENV,
+    "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
+    "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
+}
+
 
 @dataclass(frozen=True)
 class AppConfig:
-    """Non-sensitive configuration loaded from environment variables."""
+    """Non-sensitive configuration loaded from a config file and/or environment variables."""
 
     rovo_mcp_server_url: str
     atlassian_cloud_id: str
@@ -51,46 +66,138 @@ class AppConfig:
     bedrock_agent_alias_id: str
 
 
-def load_config() -> AppConfig:
-    """Load non-sensitive configuration from environment variables.
+def load_config(config_path: str | None = None) -> AppConfig:
+    """Load configuration from a JSON/YAML file with environment variable overrides.
+
+    Resolution order (last wins):
+    1. Config file (JSON or YAML)
+    2. Environment variables
+
+    The config file path is resolved as:
+    1. Explicit ``config_path`` argument
+    2. ``SLACK_AGENT_ROUTER_CONFIG`` environment variable
+    3. First existing file from ``config.yaml``, ``config.json`` in the
+       current working directory
+
+    A config file is optional — environment variables alone are sufficient.
 
     Environment variables:
 
-    * ``ROVO_MCP_SERVER_URL``   — Rovo MCP Server endpoint URL
-    * ``ATLASSIAN_CLOUD_ID``    — Atlassian Cloud instance ID
-    * ``GCP_PROJECT_ID``        — GCP project hosting Vertex AI Search
-    * ``VERTEX_LOCATION``       — Vertex AI Search location (e.g. "global")
-    * ``VERTEX_DATA_STORE_ID``  — Vertex AI Search data store ID
-    * ``BEDROCK_AGENT_ID``      — Amazon Bedrock Agent ID
+    * ``ROVO_MCP_SERVER_URL``    — Rovo MCP Server endpoint URL
+    * ``ATLASSIAN_CLOUD_ID``     — Atlassian Cloud instance ID
+    * ``GCP_PROJECT_ID``         — GCP project hosting Vertex AI Search
+    * ``VERTEX_LOCATION``        — Vertex AI Search location (e.g. "global")
+    * ``VERTEX_DATA_STORE_ID``   — Vertex AI Search data store ID
+    * ``BEDROCK_AGENT_ID``       — Amazon Bedrock Agent ID
     * ``BEDROCK_AGENT_ALIAS_ID`` — Amazon Bedrock Agent alias ID
 
     Raises:
-        RuntimeError: If any required environment variable is missing.
+        RuntimeError: If any required config value is missing after
+            merging file and environment sources, or if the config
+            file exists but cannot be parsed.
     """
-    env_map = {
-        "rovo_mcp_server_url": _ROVO_MCP_SERVER_URL_ENV,
-        "atlassian_cloud_id": _ATLASSIAN_CLOUD_ID_ENV,
-        "gcp_project_id": _GCP_PROJECT_ID_ENV,
-        "vertex_location": _VERTEX_LOCATION_ENV,
-        "vertex_data_store_id": _VERTEX_DATA_STORE_ID_ENV,
-        "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
-        "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
-    }
+    # --- Load base values from config file --------------------------
+    file_values = _load_config_file(config_path)
 
+    # --- Apply environment variable overrides -----------------------
     values: dict[str, str] = {}
-    missing: list[str] = []
+    for field_name, env_var in _ENV_MAP.items():
+        env_value = os.environ.get(env_var, "").strip()
+        if env_value:
+            values[field_name] = env_value
+        elif field_name in file_values and file_values[field_name]:
+            values[field_name] = str(file_values[field_name]).strip()
 
-    for field_name, env_var in env_map.items():
-        value = os.environ.get(env_var, "").strip()
-        if not value:
+    # --- Validate all required fields are present -------------------
+    missing: list[str] = []
+    for field_name, env_var in _ENV_MAP.items():
+        if not values.get(field_name):
             missing.append(env_var)
-        else:
-            values[field_name] = value
 
     if missing:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+        raise RuntimeError(f"Missing required configuration: {', '.join(missing)}")
 
     return AppConfig(**values)
+
+
+def _load_config_file(config_path: str | None = None) -> dict[str, Any]:
+    """Load and parse a JSON or YAML config file.
+
+    Returns an empty dict if no config file is found (env-only mode).
+
+    Raises:
+        RuntimeError: If an explicit path is given but the file doesn't
+            exist or can't be parsed.
+    """
+    import pathlib
+
+    resolved = _resolve_config_path(config_path)
+    if resolved is None:
+        return {}
+
+    path = pathlib.Path(resolved)
+    if not path.is_file():
+        # Only raise if the path was explicitly specified
+        if config_path or os.environ.get(_CONFIG_FILE_ENV):
+            raise RuntimeError(f"Config file not found: {resolved}")
+        return {}
+
+    text = path.read_text(encoding="utf-8")
+
+    if path.suffix in (".yaml", ".yml"):
+        return _parse_yaml(text, resolved)
+    if path.suffix == ".json":
+        return _parse_json(text, resolved)
+
+    # Try JSON first, fall back to YAML for extensionless files
+    try:
+        return _parse_json(text, resolved)
+    except RuntimeError:
+        return _parse_yaml(text, resolved)
+
+
+def _resolve_config_path(config_path: str | None) -> str | None:
+    """Determine which config file to load, if any."""
+    import pathlib
+
+    if config_path:
+        return config_path
+
+    env_path = os.environ.get(_CONFIG_FILE_ENV, "").strip()
+    if env_path:
+        return env_path
+
+    for default in _DEFAULT_CONFIG_PATHS:
+        if pathlib.Path(default).is_file():
+            return default
+
+    return None
+
+
+def _parse_json(text: str, path: str) -> dict[str, Any]:
+    """Parse JSON config text."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid JSON in config file {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Config file {path} must contain a JSON object, got {type(data).__name__}")
+    return data
+
+
+def _parse_yaml(text: str, path: str) -> dict[str, Any]:
+    """Parse YAML config text."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f"Invalid YAML in config file {path}: {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Config file {path} must contain a YAML mapping, got {type(data).__name__}")
+    return data
 
 
 # ------------------------------------------------------------------
