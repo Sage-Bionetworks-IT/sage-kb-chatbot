@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 _CONFIG_FILE_ENV = "SLACK_AGENT_ROUTER_CONFIG"
 _DEFAULT_CONFIG_PATHS = ("config.yaml", "config.json")
 
+_ATLASSIAN_SERVICE_USER_ENV = "ATLASSIAN_SERVICE_USER"
 _ROVO_MCP_SERVER_URL_ENV = "ROVO_MCP_SERVER_URL"
 _ATLASSIAN_CLOUD_ID_ENV = "ATLASSIAN_CLOUD_ID"
 _GCP_PROJECT_ID_ENV = "GCP_PROJECT_ID"
@@ -44,6 +45,7 @@ _SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"
 
 # Maps AppConfig field name → environment variable name.
 _ENV_MAP: dict[str, str] = {
+    "atlassian_service_user": _ATLASSIAN_SERVICE_USER_ENV,
     "rovo_mcp_server_url": _ROVO_MCP_SERVER_URL_ENV,
     "atlassian_cloud_id": _ATLASSIAN_CLOUD_ID_ENV,
     "gcp_project_id": _GCP_PROJECT_ID_ENV,
@@ -59,6 +61,7 @@ _ENV_MAP: dict[str, str] = {
 class AppConfig:
     """Non-sensitive configuration loaded from a config file and/or environment variables."""
 
+    atlassian_service_user: str
     rovo_mcp_server_url: str
     atlassian_cloud_id: str
     gcp_project_id: str
@@ -344,6 +347,7 @@ async def main() -> None:
         mcp_server_url=config.rovo_mcp_server_url,
         api_token=secrets["atlassian_api_token"],
         cloud_id=config.atlassian_cloud_id,
+        service_user=config.atlassian_service_user,
     )
 
     vertex_backend = VertexAISearchBackend(

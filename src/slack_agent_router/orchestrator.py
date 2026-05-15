@@ -138,7 +138,7 @@ class BedrockAgentOrchestrator:
         tool_calls_made: list[str] = []
         cached_outputs: dict[str, ToolOutput] = {}  # cache key → ToolOutput
         all_source_urls: list[str] = []
-        invocation_results: list[dict] | None = None
+        invocation_results: dict | None = None
 
         for iteration in range(self._max_iterations + 1):
             try:
@@ -214,9 +214,13 @@ class BedrockAgentOrchestrator:
                             if url and url not in all_source_urls:
                                 all_source_urls.append(url)
 
-                invocation_results.append(
-                    self._build_return_control_result(invocation_id, action_group, function_name, tool_output)
-                )
+                invocation_results.append(self._build_return_control_result(action_group, function_name, tool_output))
+
+            # Attach invocation_id at the session state level
+            invocation_results = {
+                "invocationId": invocation_id,
+                "results": invocation_results,
+            }
 
         # Fell through the loop without a final answer
         logger.warning("Return control loop exhausted without final answer")
@@ -226,7 +230,7 @@ class BedrockAgentOrchestrator:
         self,
         question: str,
         session_id: str,
-        return_control_results: list[dict] | None = None,
+        return_control_results: dict | None = None,
     ) -> dict:
         """Invoke the Bedrock Agent via boto3.
 
@@ -242,7 +246,7 @@ class BedrockAgentOrchestrator:
         self,
         question: str,
         session_id: str,
-        return_control_results: list[dict] | None = None,
+        return_control_results: dict | None = None,
     ) -> dict:
         """Synchronous boto3 InvokeAgent call (runs in a worker thread)."""
         import boto3
@@ -258,7 +262,8 @@ class BedrockAgentOrchestrator:
 
         if return_control_results:
             kwargs["sessionState"] = {
-                "returnControlInvocationResults": return_control_results,
+                "invocationId": return_control_results["invocationId"],
+                "returnControlInvocationResults": return_control_results["results"],
             }
 
         response = client.invoke_agent(**kwargs)
@@ -290,6 +295,7 @@ class BedrockAgentOrchestrator:
             )
 
         query_text = parameters.get("query", parameters.get("question", ""))
+        logger.info("Executing tool %s.%s with query: %s", action_group, function_name, query_text[:100])
         try:
             result = await backend.query(query_text)
         except Exception as exc:
@@ -300,6 +306,15 @@ class BedrockAgentOrchestrator:
                 sources=[],
                 error_message=f"Backend {action_group} is temporarily unavailable",
             )
+
+        logger.info(
+            "Backend %s returned: success=%s, answer_length=%d, sources=%d, error=%s",
+            action_group,
+            result.success,
+            len(result.answer or ""),
+            len(result.source_urls),
+            result.error_message,
+        )
 
         return _backend_result_to_tool_output(result)
 
@@ -354,12 +369,11 @@ class BedrockAgentOrchestrator:
 
     @staticmethod
     def _build_return_control_result(
-        invocation_id: str,
         action_group: str,
         function_name: str,
         tool_output: ToolOutput,
     ) -> dict:
-        """Build the returnControlInvocationResults entry for the agent."""
+        """Build a single returnControlInvocationResults entry for the agent."""
         body = {
             "success": tool_output.success,
             "content": tool_output.content,
@@ -369,7 +383,6 @@ class BedrockAgentOrchestrator:
             body["error"] = tool_output.error_message
 
         return {
-            "invocationId": invocation_id,
             "functionResult": {
                 "actionGroup": action_group,
                 "function": function_name,

@@ -393,20 +393,20 @@ class TestResolveToolName:
         result = RovoMCPBackend._resolve_tool_name(tools_response)
         assert result == "confluence_search"
 
-    def test_picks_tool_with_rovo_in_name(self):
-        """When a tool name contains 'rovo', it is selected."""
+    def test_picks_preferred_tool_over_others(self):
+        """When a preferred tool is available, it is selected over others."""
         tool_a = MagicMock()
         tool_a.name = "list_pages"
         tool_b = MagicMock()
-        tool_b.name = "rovo_query"
+        tool_b.name = "searchConfluenceUsingCql"
         tools_response = MagicMock()
         tools_response.tools = [tool_a, tool_b]
 
         result = RovoMCPBackend._resolve_tool_name(tools_response)
-        assert result == "rovo_query"
+        assert result == "searchConfluenceUsingCql"
 
     def test_falls_back_to_first_tool_when_no_search_or_rovo(self):
-        """When no tool name contains 'search' or 'rovo', the first tool is used."""
+        """When no tool name contains 'search' or preferred names, the first tool is used."""
         tool_a = MagicMock()
         tool_a.name = "list_pages"
         tool_b = MagicMock()
@@ -418,16 +418,16 @@ class TestResolveToolName:
         assert result == "list_pages"
 
     def test_falls_back_to_default_when_tools_list_empty(self):
-        """When the tools list is empty, the default _TOOL_NAME is returned."""
+        """When the tools list is empty, the first preferred tool name is returned."""
         tools_response = MagicMock()
         tools_response.tools = []
 
         result = RovoMCPBackend._resolve_tool_name(tools_response)
-        assert result == RovoMCPBackend._TOOL_NAME
+        assert result == RovoMCPBackend._PREFERRED_TOOLS[0]
 
     def test_falls_back_to_default_when_no_tools_attr(self):
-        """When the response has no tools attribute, the default _TOOL_NAME is returned."""
+        """When the response has no tools attribute, the first preferred tool name is returned."""
         tools_response = object()
 
         result = RovoMCPBackend._resolve_tool_name(tools_response)
-        assert result == RovoMCPBackend._TOOL_NAME
+        assert result == RovoMCPBackend._PREFERRED_TOOLS[0]

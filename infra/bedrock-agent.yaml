@@ -21,7 +21,7 @@ Parameters:
 
   AgentAliasName:
     Type: String
-    Default: v1
+    Default: live
     Description: Name of the agent alias used by the application.
 
 Resources:
@@ -47,10 +47,13 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Effect: Allow
+              - Sid: AllowModelInvocation
+                Effect: Allow
                 Action:
                   - bedrock:InvokeModel
-                Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/${FoundationModelId}"
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                  - "arn:aws:bedrock:*::foundation-model/*"
 
   # -----------------------------------------------------------------
   # Bedrock Agent with two RETURN_CONTROL action groups
@@ -103,6 +106,7 @@ Resources:
       ActionGroups:
         # --- SearchConfluenceJira (Rovo MCP) -----------------------
         - ActionGroupName: SearchConfluenceJira
+          ActionGroupState: ENABLED
           Description: >
             Search Confluence wiki pages and Jira issues via Atlassian
             Rovo to find internal documentation, policies, project
@@ -126,6 +130,7 @@ Resources:
 
         # --- SearchGoogleSites (Vertex AI Search) ------------------
         - ActionGroupName: SearchGoogleSites
+          ActionGroupState: ENABLED
           Description: >
             Search the company Google Sites website via Vertex AI Search
             to find employee handbook content, team information, and
@@ -152,10 +157,11 @@ Resources:
   # -----------------------------------------------------------------
   SlackAgentRouterAlias:
     Type: AWS::Bedrock::AgentAlias
+    DependsOn: SlackAgentRouterAgent
     Properties:
       AgentId: !GetAtt SlackAgentRouterAgent.AgentId
       AgentAliasName: !Ref AgentAliasName
-      Description: Live alias for the Slack Agent Router application.
+      Description: !Sub "Alias for ${AgentName} using ${FoundationModelId}"
 
 Outputs:
   AgentId:
