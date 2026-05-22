@@ -19,7 +19,7 @@ from slack_agent_router.models import BackendResult
 
 logger = logging.getLogger(__name__)
 
-_URL_PATTERN = re.compile(r"https?://[^\s)\]>\"']+")
+_URL_PATTERN = re.compile(r"https?://[^\s\]>\"']+")
 
 
 class RovoMCPBackend:
@@ -43,6 +43,7 @@ class RovoMCPBackend:
         self._api_token = api_token
         self._cloud_id = cloud_id
         self._timeout_seconds = timeout_seconds
+        self._cached_tool_name: str | None = None
 
     @property
     def name(self) -> str:
@@ -133,8 +134,9 @@ class RovoMCPBackend:
         """Connect to the MCP server and call the search tool.
 
         Opens a fresh Streamable HTTP connection, initialises the
-        session, and invokes the tool.  The connection is closed when
-        the context managers exit.
+        session, and invokes the tool.  Uses a cached tool name when
+        available to skip the list_tools() round-trip. Falls back to
+        re-discovery if the cached tool name fails.
         """
         headers = {
             "Authorization": f"Bearer {self._api_token}",
@@ -148,13 +150,28 @@ class RovoMCPBackend:
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
 
-                tools_response = await session.list_tools()
-                tool_name = self._resolve_tool_name(tools_response)
+                # Use cached tool name or discover it
+                if self._cached_tool_name is None:
+                    tools_response = await session.list_tools()
+                    self._cached_tool_name = self._resolve_tool_name(tools_response)
 
                 result = await session.call_tool(
-                    tool_name,
+                    self._cached_tool_name,
                     {"query": question},
                 )
+
+                # If the cached tool failed, re-discover and retry once
+                if result.isError and self._cached_tool_name:
+                    logger.info("Cached tool %s failed, re-discovering tools", self._cached_tool_name)
+                    tools_response = await session.list_tools()
+                    new_tool_name = self._resolve_tool_name(tools_response)
+                    if new_tool_name != self._cached_tool_name:
+                        self._cached_tool_name = new_tool_name
+                        result = await session.call_tool(
+                            self._cached_tool_name,
+                            {"query": question},
+                        )
+
                 return result
 
     @classmethod
@@ -225,11 +242,19 @@ class RovoMCPBackend:
 def _extract_urls(text: str) -> list[str]:
     """Extract all HTTP(S) URLs from text, preserving order and removing duplicates.
 
-    Strips trailing sentence punctuation (. , ; : ! ?) that the regex
-    may accidentally capture when a URL appears mid-sentence.
+    Handles URLs with parentheses (common in wiki/Jira links) by
+    stripping only unbalanced trailing closing parens. Also strips
+    trailing sentence punctuation.
     """
     raw = _URL_PATTERN.findall(text)
-    cleaned = [url.rstrip(".,;:!?") for url in raw]
+    cleaned: list[str] = []
+    for url in raw:
+        # Strip trailing sentence punctuation
+        url = url.rstrip(".,;:!?")
+        # Strip unbalanced trailing closing parens
+        while url.endswith(")") and url.count(")") > url.count("("):
+            url = url[:-1]
+        cleaned.append(url)
     return list(dict.fromkeys(cleaned))
 
 
