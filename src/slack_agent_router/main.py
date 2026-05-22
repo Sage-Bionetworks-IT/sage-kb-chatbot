@@ -240,6 +240,9 @@ async def load_secrets(secret_id: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Secret value is not valid JSON: {exc}") from exc
 
+    if not isinstance(secrets, dict):
+        raise RuntimeError(f"Secret value must be a JSON object, got {type(secrets).__name__}")
+
     # If gcp_service_account is stored as a JSON string rather than a
     # nested object, parse it into a dict so the Vertex backend can
     # consume it directly.
@@ -287,22 +290,33 @@ def _configure_logging() -> None:
     """Set up structured JSON logging to stdout.
 
     ECS Fargate captures stdout/stderr and ships it to CloudWatch.
-    Using a JSON formatter makes logs machine-parseable for
-    CloudWatch Logs Insights queries.
+    Uses a custom JSON formatter that properly escapes all fields
+    so output is always valid JSON regardless of message content.
     """
+    import json as _json
+
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+    class _JsonFormatter(logging.Formatter):
+        """Emit each log record as a single valid JSON line."""
+
+        def format(self, record: logging.LogRecord) -> str:
+            entry = {
+                "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
+            if record.exc_info and record.exc_info[0] is not None:
+                entry["exception"] = self.formatException(record.exc_info)
+            return _json.dumps(entry, default=str)
 
     root = logging.getLogger()
     root.setLevel(log_level)
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(log_level)
-
-    formatter = logging.Formatter(
-        '{"timestamp":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":%(message)s}',
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
-    handler.setFormatter(formatter)
+    handler.setFormatter(_JsonFormatter())
 
     # Avoid duplicate handlers on repeated calls (e.g. in tests)
     root.handlers.clear()
@@ -317,7 +331,7 @@ def _configure_logging() -> None:
 async def main() -> None:
     """Application entrypoint — load config + secrets, wire components, start services."""
     _configure_logging()
-    logger.info('"Starting Slack Agent Router"')
+    logger.info("Starting Slack Agent Router")
 
     config = load_config()
     secrets = await load_secrets(config.secret_id)
@@ -376,7 +390,7 @@ async def main() -> None:
     shutdown_event = asyncio.Event()
 
     async def _shutdown() -> None:
-        logger.info('"Shutting down Slack Agent Router"')
+        logger.info("Shutting down Slack Agent Router")
         await app.stop()
         shutdown_event.set()
 
@@ -387,23 +401,39 @@ async def main() -> None:
     tasks: list[asyncio.Task[None]] = []
 
     if health_server is not None:
-        tasks.append(asyncio.create_task(health_server.start()))
+        tasks.append(asyncio.create_task(health_server.start(), name="health_server"))
 
-    tasks.append(asyncio.create_task(app.start()))
+    tasks.append(asyncio.create_task(app.start(), name="slack_app"))
 
-    logger.info('"Slack Agent Router is running"')
+    # Monitor task: triggers shutdown_event if a service task fails
+    async def _watch_tasks() -> None:
+        """Exit promptly if any service task raises an exception."""
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for task in done:
+            if task.exception() is not None:
+                logger.error(
+                    "Service task %s failed: %s",
+                    task.get_name(),
+                    task.exception(),
+                )
+                shutdown_event.set()
 
-    # Wait until a shutdown signal is received
+    watcher = asyncio.create_task(_watch_tasks(), name="task_watcher")
+
+    logger.info("Slack Agent Router is running")
+
+    # Wait until a shutdown signal or a task failure
     await shutdown_event.wait()
 
-    # Cancel any remaining tasks
+    # Cancel all tasks (services + watcher)
+    watcher.cancel()
     for task in tasks:
         task.cancel()
 
     # Allow tasks to finish cancellation
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(watcher, *tasks, return_exceptions=True)
 
-    logger.info('"Slack Agent Router stopped"')
+    logger.info("Slack Agent Router stopped")
 
 
 async def _create_health_check(app: Any, backends: list[Any]) -> Any | None:
@@ -418,7 +448,7 @@ async def _create_health_check(app: Any, backends: list[Any]) -> Any | None:
 
         return HealthCheck(app=app, backends=backends)
     except ImportError:
-        logger.warning('"HealthCheck module not available — skipping health server"')
+        logger.warning("HealthCheck module not available — skipping health server")
         return None
 
 

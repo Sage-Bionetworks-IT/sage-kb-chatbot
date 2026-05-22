@@ -522,7 +522,7 @@ class TestCreateHealthCheck:
             with patch("builtins.__import__", side_effect=ImportError("no module")):
                 result = await _create_health_check(MagicMock(), [])
 
-        assert result is None or result is not None
+        assert result is None
 
     async def test_returns_health_check_when_available(self) -> None:
         from slack_agent_router.main import _create_health_check
