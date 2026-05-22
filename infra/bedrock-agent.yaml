@@ -13,10 +13,11 @@ Parameters:
 
   FoundationModelId:
     Type: String
-    Default: anthropic.claude-sonnet-4-20250514-v1:0
+    Default: us.anthropic.claude-sonnet-4-6
     Description: >
-      Bedrock foundation model ID for the agent.
-      See https://docs.aws.amazon.com/bedrock/latest/userguide/agents-supported.html
+      Bedrock foundation model or inference profile ID.
+      Use a cross-region inference profile (us.*) for
+      models that require it.
 
   AgentAliasName:
     Type: String
@@ -94,6 +95,9 @@ Resources:
 
         Keep answers concise but complete. Use plain language appropriate
         for a workplace setting.
+
+        If there is any reason to question the source, such as being
+        multiple years old, say so clearly.
       IdleSessionTTLInSeconds: 3600
 
       ActionGroups:
