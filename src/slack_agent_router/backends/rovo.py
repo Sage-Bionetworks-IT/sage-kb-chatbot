@@ -106,7 +106,8 @@ class RovoMCPBackend:
                 self._ping_server(),
                 timeout=self._timeout_seconds,
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug("Health check failed: %s", exc)
             return False
         return True
 
@@ -171,6 +172,7 @@ class RovoMCPBackend:
             if "search" in name_lower or "rovo" in name_lower:
                 return tool.name
 
+        logger.warning("No search tool found in MCP tools list, falling back to: %s", tools_response.tools[0].name)
         return tools_response.tools[0].name
 
     def _parse_mcp_result(self, mcp_result: CallToolResult, start: float) -> BackendResult:
