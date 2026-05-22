@@ -94,7 +94,7 @@ class BedrockAgentOrchestrator:
         except asyncio.TimeoutError:
             logger.warning("ask() timed out after %.1fs", self._timeout_seconds)
             return AgentResponse(
-                answer="I'm having trouble processing your question right now. Please try again in a few minutes.",
+                answer="Your question took too long to process. Please try again — it may work on a retry.",
                 source_urls=[],
                 tool_calls_made=[],
                 latency_ms=_elapsed_ms(start),
@@ -109,7 +109,30 @@ class BedrockAgentOrchestrator:
             )
 
     async def _ask_inner(self, question: str, session_id: str, start: float) -> AgentResponse:
-        """Core return control loop logic."""
+        """Core return control loop logic.
+
+        Flow:
+        1. Call InvokeAgent with the user's question.
+        2. Check the response:
+           a. If it contains a final "output" → parse and return the answer.
+           b. If it contains "returnControl" → the agent wants us to
+              execute tool calls locally (e.g., search Confluence).
+           c. Otherwise → unexpected format, return fallback.
+        3. For each tool request in returnControl:
+           - Map the action group name to a backend (Rovo, Vertex).
+           - Execute the backend query.
+           - Cache the result (for dedup and fallback).
+           - Build the result payload to send back to the agent.
+        4. Call InvokeAgent again with the tool results.
+        5. Repeat from step 2 until a final answer or a guardrail fires.
+
+        Guardrails:
+        - Max iterations: stops after 5 loops to prevent infinite cycles.
+        - Duplicate detection: skips tool calls with identical
+          (action_group, parameters) seen earlier in this loop.
+        - On any failure mid-loop: returns a fallback response built
+          from whatever successful tool outputs were cached so far.
+        """
         tool_calls_made: list[str] = []
         cached_outputs: dict[str, ToolOutput] = {}  # cache key → ToolOutput
         all_source_urls: list[str] = []
