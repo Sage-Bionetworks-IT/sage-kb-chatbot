@@ -99,7 +99,8 @@ class VertexAISearchBackend:
                 self._search("health check"),
                 timeout=self._timeout_seconds,
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug("Health check failed: %s", exc)
             return False
         return True
 

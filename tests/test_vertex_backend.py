@@ -315,7 +315,9 @@ class TestVertexEmptySummary:
     async def test_none_summary_returns_failed_result(self, backend):
         """When response.summary is None, BackendResult has success=False."""
         api_response = MagicMock()
-        api_response.results = [MagicMock()]
+        result_mock = MagicMock()
+        result_mock.document.derived_struct_data = {}
+        api_response.results = [result_mock]
         api_response.summary = None
 
         with patch.object(backend, "_search", new_callable=AsyncMock) as mock_search:
@@ -329,7 +331,9 @@ class TestVertexEmptySummary:
     async def test_empty_summary_text_returns_failed_result(self, backend):
         """When summary_text is empty string, BackendResult has success=False."""
         api_response = MagicMock()
-        api_response.results = [MagicMock()]
+        result_mock = MagicMock()
+        result_mock.document.derived_struct_data = {}
+        api_response.results = [result_mock]
         api_response.summary = MagicMock()
         api_response.summary.summary_text = ""
 
@@ -344,7 +348,9 @@ class TestVertexEmptySummary:
     async def test_whitespace_summary_text_returns_failed_result(self, backend):
         """When summary_text is only whitespace, BackendResult has success=False."""
         api_response = MagicMock()
-        api_response.results = [MagicMock()]
+        result_mock = MagicMock()
+        result_mock.document.derived_struct_data = {}
+        api_response.results = [result_mock]
         api_response.summary = MagicMock()
         api_response.summary.summary_text = "   \n\t  "
 
