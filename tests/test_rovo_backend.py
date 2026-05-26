@@ -168,9 +168,13 @@ class TestRovoMCPResponseParsing:
 
     @given(data=mcp_tool_result_with_embedded_urls())
     @settings(max_examples=50)
-    async def test_embedded_urls_extracted_into_source_urls(self, data):
-        """For any MCP response with embedded URLs, all URLs appear in source_urls."""
-        mcp_result, _, expected_urls = data
+    async def test_source_urls_empty_for_mcp_responses(self, data):
+        """Source URLs are not extracted from MCP response text.
+
+        The Bedrock Agent curates citations in its synthesized answer,
+        so we don't extract URLs from raw backend responses.
+        """
+        mcp_result, _, _ = data
         backend = RovoMCPBackend(
             mcp_server_url="https://mcp.atlassian.com/v1/mcp",
             api_token="test-token-placeholder",
@@ -183,8 +187,7 @@ class TestRovoMCPResponseParsing:
 
         assert isinstance(result, BackendResult)
         assert result.success is True
-        for url in expected_urls:
-            assert url in result.source_urls, f"Missing URL: {url}"
+        assert result.source_urls == []
 
     @given(question=plain_word)
     @settings(max_examples=30)

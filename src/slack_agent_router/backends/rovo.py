@@ -249,7 +249,7 @@ class RovoMCPBackend:
                 latency_ms=_elapsed_ms(start),
             )
 
-        source_urls = _extract_urls(answer_text)
+        source_urls: list[str] = []
 
         return BackendResult(
             backend_name=self.name,
@@ -273,11 +273,12 @@ class RovoMCPBackend:
 
 
 def _extract_urls(text: str) -> list[str]:
-    """Extract all HTTP(S) URLs from text, preserving order and removing duplicates.
+    """Extract user-facing URLs from text, filtering out API metadata.
 
     Handles URLs with parentheses (common in wiki/Jira links) by
-    stripping only unbalanced trailing closing parens. Also strips
-    trailing sentence punctuation.
+    stripping only unbalanced trailing closing parens. Filters out
+    REST API endpoints (user lookups, content history, search queries)
+    that are internal metadata rather than user-facing page links.
     """
     raw = _URL_PATTERN.findall(text)
     cleaned: list[str] = []
@@ -287,8 +288,30 @@ def _extract_urls(text: str) -> list[str]:
         # Strip unbalanced trailing closing parens
         while url.endswith(")") and url.count(")") > url.count("("):
             url = url[:-1]
+        # Filter out REST API metadata URLs
+        if _is_api_metadata_url(url):
+            continue
         cleaned.append(url)
     return list(dict.fromkeys(cleaned))
+
+
+# Patterns that indicate an internal API/metadata URL rather than
+# a user-facing page link.
+_API_METADATA_PATTERNS = (
+    "/rest/api/user",
+    "/rest/api/content/",
+    "/rest/api/search",
+    "/rest/api/space",
+    "/rest/agile/",
+)
+
+
+def _is_api_metadata_url(url: str) -> bool:
+    """Return True if the URL is an internal API endpoint, not a user-facing page."""
+    for pattern in _API_METADATA_PATTERNS:
+        if pattern in url:
+            return True
+    return False
 
 
 def _elapsed_ms(start: float) -> float:
