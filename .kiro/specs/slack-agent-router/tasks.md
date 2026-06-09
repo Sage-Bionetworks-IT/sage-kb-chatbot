@@ -106,14 +106,14 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run tests from 5.1 — all must pass
     - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-- [ ] 6. Implement Vertex AI Search backend
-  - [ ] 6.1 Write tests for VertexAISearchBackend (RED)
+- [x] 6. Implement Vertex AI Search backend
+  - [x] 6.1 Write tests for VertexAISearchBackend (RED)
     - **Property 11: Vertex AI Search response parsing completeness** — for any valid API response, the backend produces a BackendResult with success=True, answer text with AI summary, and all source URLs
     - Unit tests: API error returns BackendResult with success=False, health_check returns boolean
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 8.2, 8.3**
 
-  - [ ] 6.2 Implement VertexAISearchBackend (GREEN)
+  - [x] 6.2 Implement VertexAISearchBackend (GREEN)
     - Create `src/slack_agent_router/backends/vertex.py`
     - Query Vertex AI Search API with configured project, location, and data store
     - Authenticate using GCP service account credentials from Secrets Manager
