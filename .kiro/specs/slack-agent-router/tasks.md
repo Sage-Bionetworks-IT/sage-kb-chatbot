@@ -90,13 +90,13 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 5. Implement Rovo MCP backend
-  - [ ] 5.1 Write tests for RovoMCPBackend (RED)
+  - [x] 5.1 Write tests for RovoMCPBackend (RED)
     - **Property 10: Rovo MCP response parsing completeness** — for any valid MCP response, the backend produces a BackendResult with success=True, answer text, and all source URLs
     - Unit tests: auth failure returns BackendResult with success=False, timeout returns BackendResult with success=False, health_check returns boolean
     - Tests should fail initially (no implementation yet)
     - **Validates: Requirements 7.2, 7.3, 7.4**
 
-  - [ ] 5.2 Implement RovoMCPBackend (GREEN)
+  - [x] 5.2 Implement RovoMCPBackend (GREEN)
     - Create `src/slack_agent_router/backends/rovo.py`
     - Connect to Rovo MCP Server using the `mcp` Python SDK's ClientSession with Streamable HTTP transport
     - Authenticate using Atlassian API token from Secrets Manager
