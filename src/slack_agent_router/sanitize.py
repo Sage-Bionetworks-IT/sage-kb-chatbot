@@ -56,4 +56,65 @@ def sanitize_backend_response(content: str) -> str:
     # Any remaining angle-bracket mentions
     text = re.sub(r"<!([\w]+)>", r"@\1", text)
 
+    # Convert Markdown links [text](url) to Slack mrkdwn <url|text>
+    text = _markdown_links_to_slack(text)
+
+    # Convert Markdown formatting to Slack mrkdwn
+    text = _markdown_to_slack_formatting(text)
+
+    # Escape remaining angle brackets that aren't valid Slack links.
+    # Slack treats <...> as special syntax — unrecognized patterns get
+    # stripped/hidden. This preserves literal angle-bracket content.
+    text = _escape_stray_angle_brackets(text)
+
     return text
+
+
+# Matches Markdown links: [display text](url)
+_MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
+
+
+def _markdown_links_to_slack(text: str) -> str:
+    """Convert Markdown-style links to Slack mrkdwn format.
+
+    [Display Text](https://example.com) → <https://example.com|Display Text>
+    """
+    return _MARKDOWN_LINK_PATTERN.sub(r"<\2|\1>", text)
+
+
+def _markdown_to_slack_formatting(text: str) -> str:
+    """Convert Markdown formatting to Slack mrkdwn equivalents.
+
+    - **bold** → *bold* (Slack uses single asterisks for bold)
+    - ### Heading → *Heading* (Slack has no headings, use bold)
+    """
+    # Bold: **text** → *text* (must come before heading conversion)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"*\1*", text)
+
+    # Headings: ### text, ## text, # text → *text* (bold as substitute)
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+
+    return text
+
+
+# Matches angle-bracket content that is NOT a valid Slack link/mention.
+# Valid Slack patterns: <url>, <url|text>, <@U123>, <#C123>, <!here>
+_VALID_SLACK_ANGLE_BRACKET = re.compile(r"<(?:https?://[^>]+|@[^>]+|#[^>]+|![^>]+)>")
+
+
+def _escape_stray_angle_brackets(text: str) -> str:
+    """Escape angle brackets that aren't valid Slack mrkdwn syntax.
+
+    Slack interprets <...> as links/mentions. Content like <search>
+    or <Confluence> gets stripped. This replaces stray angle brackets
+    with their HTML entities so they render as literal characters.
+    """
+
+    def _replace_match(m: re.Match[str]) -> str:
+        content = m.group(0)
+        if _VALID_SLACK_ANGLE_BRACKET.fullmatch(content):
+            return content
+        # Escape the angle brackets so Slack shows them literally
+        return content.replace("<", "&lt;").replace(">", "&gt;")
+
+    return re.sub(r"<[^>]*>", _replace_match, text)

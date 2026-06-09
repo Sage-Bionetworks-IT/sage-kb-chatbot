@@ -327,6 +327,7 @@ class BedrockAgentOrchestrator:
     ) -> AgentResponse:
         """Extract the synthesized answer from the agent's final response."""
         text = response.get("output", {}).get("text", "")
+        logger.debug("Agent raw response (first 500 chars): %s", text[:500])
         return AgentResponse(
             answer=text,
             source_urls=source_urls,
