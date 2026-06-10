@@ -152,7 +152,7 @@ class TestReturnControlLoopIterationBound:
             call_count += 1
             return _make_return_control_response(
                 "SearchConfluenceJira",
-                "search",
+                "find_content",
                 {"query": f"test-{call_count}"},
             )
 
@@ -172,7 +172,7 @@ class TestReturnControlLoopIterationBound:
             call_count += 1
             return _make_return_control_response(
                 "SearchConfluenceJira",
-                "search",
+                "find_content",
                 {"query": f"test-{call_count}"},
             )
 
@@ -208,7 +208,7 @@ class TestReturnControlLoopIterationBound:
             call_count += 1
             return _make_return_control_response(
                 "SearchConfluenceJira",
-                "search",
+                "find_content",
                 {"query": f"q-{call_count}"},
             )
 
@@ -229,8 +229,8 @@ class TestDuplicateToolCallDetection:
     async def test_duplicate_tool_call_skipped(self, orchestrator, rovo_backend):
         """Same action_group + params requested twice — second is skipped."""
         responses = [
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": "PTO"}),
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": "PTO"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
             _make_final_response("PTO is 20 days."),
         ]
         call_idx = 0
@@ -250,8 +250,8 @@ class TestDuplicateToolCallDetection:
     async def test_different_params_not_treated_as_duplicate(self, orchestrator, rovo_backend):
         """Different parameters for same action group are NOT duplicates."""
         responses = [
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": "PTO"}),
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": "benefits"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "benefits"}),
             _make_final_response("PTO and benefits info."),
         ]
         call_idx = 0
@@ -287,8 +287,8 @@ class TestDuplicateToolCallDetection:
             vertex_backend=vb,
         )
         responses = [
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": query}),
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": query}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": query}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": query}),
             _make_final_response("Answer."),
         ]
         call_idx = 0
@@ -316,7 +316,7 @@ class TestActionGroupToBackendMapping:
     async def test_search_confluence_jira_maps_to_rovo(self, orchestrator, rovo_backend, vertex_backend):
         """SearchConfluenceJira dispatches to Rovo backend."""
         responses = [
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": "PTO"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
             _make_final_response("PTO is 20 days."),
         ]
         call_idx = 0
@@ -336,7 +336,7 @@ class TestActionGroupToBackendMapping:
     async def test_search_google_sites_maps_to_vertex(self, orchestrator, rovo_backend, vertex_backend):
         """SearchGoogleSites dispatches to Vertex backend."""
         responses = [
-            _make_return_control_response("SearchGoogleSites", "search", {"query": "handbook"}),
+            _make_return_control_response("SearchGoogleSites", "find_content", {"query": "handbook"}),
             _make_final_response("Handbook info."),
         ]
         call_idx = 0
@@ -373,7 +373,7 @@ class TestActionGroupToBackendMapping:
             vertex_backend=vb,
         )
         responses = [
-            _make_return_control_response(ag, "search", {"query": query}),
+            _make_return_control_response(ag, "find_content", {"query": query}),
             _make_final_response("Answer."),
         ]
         call_idx = 0
@@ -395,7 +395,7 @@ class TestActionGroupToBackendMapping:
     async def test_unknown_action_group_returns_error_tool_output(self, orchestrator):
         """Unknown action group produces a failed ToolOutput, not an exception."""
         responses = [
-            _make_return_control_response("UnknownBackend", "search", {"query": "test"}),
+            _make_return_control_response("UnknownBackend", "find_content", {"query": "test"}),
             _make_final_response("Partial answer."),
         ]
         call_idx = 0
@@ -547,7 +547,7 @@ class TestAgentFailureAfterToolCalls:
             if call_idx == 1:
                 return _make_return_control_response(
                     "SearchConfluenceJira",
-                    "search",
+                    "find_content",
                     {"query": "PTO"},
                 )
             raise RuntimeError("Bedrock Agent failed mid-loop")
@@ -570,7 +570,7 @@ class TestAgentFailureAfterToolCalls:
             if call_idx == 1:
                 return _make_return_control_response(
                     "SearchConfluenceJira",
-                    "search",
+                    "find_content",
                     {"query": "PTO"},
                 )
             raise RuntimeError("Bedrock Agent failed")
@@ -620,7 +620,7 @@ class TestHappyPath:
     async def test_single_tool_call_flow(self, orchestrator, rovo_backend):
         """Question → one tool call → final answer."""
         responses = [
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": "PTO"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
             _make_final_response("PTO is 20 days per year."),
         ]
         call_idx = 0
@@ -640,8 +640,8 @@ class TestHappyPath:
     async def test_two_tool_calls_flow(self, orchestrator, rovo_backend, vertex_backend):
         """Question → two tool calls → final answer."""
         responses = [
-            _make_return_control_response("SearchConfluenceJira", "search", {"query": "PTO"}),
-            _make_return_control_response("SearchGoogleSites", "search", {"query": "PTO"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
+            _make_return_control_response("SearchGoogleSites", "find_content", {"query": "PTO"}),
             _make_final_response("PTO is 20 days. See handbook."),
         ]
         call_idx = 0

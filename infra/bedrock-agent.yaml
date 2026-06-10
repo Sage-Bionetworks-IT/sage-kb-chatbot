@@ -111,7 +111,7 @@ Resources:
             CustomControl: RETURN_CONTROL
           FunctionSchema:
             Functions:
-              - Name: search
+              - Name: find_content
                 Description: >
                   Search Confluence and Jira content for information
                   relevant to the user's question. Returns matching
@@ -134,7 +134,7 @@ Resources:
             CustomControl: RETURN_CONTROL
           FunctionSchema:
             Functions:
-              - Name: search
+              - Name: find_content
                 Description: >
                   Search Google Sites content for information relevant
                   to the user's question. Returns matching pages with
