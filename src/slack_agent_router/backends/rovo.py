@@ -153,11 +153,12 @@ class RovoMCPBackend:
     # ------------------------------------------------------------------
 
     async def _call_mcp_tool(self, question: str) -> CallToolResult:
-        """Connect to the MCP server and call the search tool.
+        """Connect to the MCP server and call all available search tools.
 
         Opens a fresh Streamable HTTP connection, initialises the
-        session, and invokes the tool.  The connection is closed when
-        the context managers exit.
+        session, and invokes both Confluence and Jira search tools
+        if available. Results are merged into a single CallToolResult.
+        The connection is closed when the context managers exit.
         """
         headers = self._build_auth_headers()
 
@@ -169,21 +170,51 @@ class RovoMCPBackend:
                 await session.initialize()
 
                 tools_response = await session.list_tools()
-                tool_name = self._resolve_tool_name(tools_response)
+                tool_names = self._resolve_available_tools(tools_response)
                 logger.info(
                     "Available MCP tools: %s — selected: %s",
                     [t.name for t in (tools_response.tools or [])],
-                    tool_name,
+                    tool_names,
                 )
 
-                # Build arguments based on the selected tool
-                tool_args = self._build_tool_args(tool_name, question)
+                # Call all selected tools and merge results
+                results: list[CallToolResult] = []
+                for tool_name in tool_names:
+                    tool_args = self._build_tool_args(tool_name, question)
+                    result = await session.call_tool(tool_name, tool_args)
+                    results.append(result)
+                    logger.info("Tool %s returned isError=%s", tool_name, result.isError)
 
-                result = await session.call_tool(tool_name, tool_args)
-                return result
+                return self._merge_tool_results(results)
 
-    # Preferred tools in priority order — first match wins.
+    # Preferred tools in priority order.
     _PREFERRED_TOOLS = ("searchConfluenceUsingCql", "searchJiraIssuesUsingJql")
+
+    @classmethod
+    def _resolve_available_tools(cls, tools_response: ListToolsResult) -> list[str]:
+        """Find all available search tools from the server's tool list.
+
+        Returns all preferred tools that are available. If none are found,
+        falls back to any tool with "search" in the name, then to the
+        first available tool.
+        """
+        if not hasattr(tools_response, "tools") or not tools_response.tools:
+            return [cls._PREFERRED_TOOLS[0]]
+
+        available = {t.name for t in tools_response.tools}
+
+        # Collect all preferred tools that exist
+        found = [t for t in cls._PREFERRED_TOOLS if t in available]
+        if found:
+            return found
+
+        # Fall back to any tool with "search" in the name
+        search_tools = [t.name for t in tools_response.tools if "search" in t.name.lower()]
+        if search_tools:
+            return search_tools
+
+        logger.warning("No search tool found in MCP tools list, falling back to: %s", tools_response.tools[0].name)
+        return [tools_response.tools[0].name]
 
     @classmethod
     def _resolve_tool_name(cls, tools_response: ListToolsResult) -> str:
@@ -192,24 +223,49 @@ class RovoMCPBackend:
         Prefers searchConfluenceUsingCql, then searchJiraIssuesUsingJql,
         then any tool with "search" in the name, then falls back to the
         first available tool.
+
+        Note: Kept for backward compatibility with tests. Use
+        _resolve_available_tools for the multi-tool flow.
         """
-        if not hasattr(tools_response, "tools") or not tools_response.tools:
-            return cls._PREFERRED_TOOLS[0]
+        tools = cls._resolve_available_tools(tools_response)
+        return tools[0]
 
-        available = {t.name for t in tools_response.tools}
+    @staticmethod
+    def _merge_tool_results(results: list[CallToolResult]) -> CallToolResult:
+        """Merge multiple CallToolResults into a single result.
 
-        # Check preferred tools first
-        for preferred in cls._PREFERRED_TOOLS:
-            if preferred in available:
-                return preferred
+        Combines content from all successful results. If all results
+        are errors, returns the first error.
+        """
+        if not results:
+            from unittest.mock import MagicMock as _MagicMock
 
-        # Fall back to any tool with "search" in the name
-        for tool in tools_response.tools:
-            if "search" in tool.name.lower():
-                return tool.name
+            mock_result = _MagicMock()
+            mock_result.isError = True
+            mock_result.content = []
+            return mock_result
 
-        logger.warning("No search tool found in MCP tools list, falling back to: %s", tools_response.tools[0].name)
-        return tools_response.tools[0].name
+        if len(results) == 1:
+            return results[0]
+
+        # Separate successes from errors
+        successes = [r for r in results if not r.isError]
+        errors = [r for r in results if r.isError]
+
+        if not successes:
+            # All failed — return first error
+            return errors[0]
+
+        # Merge content from all successful results
+        merged_content = []
+        for result in successes:
+            if hasattr(result, "content") and result.content:
+                merged_content.extend(result.content)
+
+        # Return first successful result with merged content
+        merged = successes[0]
+        merged.content = merged_content
+        return merged
 
     def _build_tool_args(self, tool_name: str, question: str) -> dict[str, str]:
         """Build the correct arguments for the selected MCP tool."""
