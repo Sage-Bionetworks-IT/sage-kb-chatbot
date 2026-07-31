@@ -434,3 +434,171 @@ class TestResolveToolName:
 
         result = RovoMCPBackend._resolve_tool_name(tools_response)
         assert result == RovoMCPBackend._PREFERRED_TOOLS[0]
+
+
+# -------------------------------------------------------
+# _extract_urls helper
+# -------------------------------------------------------
+
+
+class TestExtractUrls:
+    """Tests for the _extract_urls helper function."""
+
+    def test_extracts_simple_url(self):
+        """Extracts a plain URL from text."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        text = "See https://confluence.example.com/wiki/PTO for details."
+        result = _extract_urls(text)
+        assert result == ["https://confluence.example.com/wiki/PTO"]
+
+    def test_extracts_multiple_urls(self):
+        """Extracts multiple URLs from text."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        text = "Check https://confluence.example.com/a and https://jira.example.com/b"
+        result = _extract_urls(text)
+        assert len(result) == 2
+        assert "https://confluence.example.com/a" in result
+        assert "https://jira.example.com/b" in result
+
+    def test_deduplicates_urls(self):
+        """Duplicate URLs are returned only once."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        text = "https://example.com/page https://example.com/page"
+        result = _extract_urls(text)
+        assert result == ["https://example.com/page"]
+
+    def test_strips_trailing_punctuation(self):
+        """Trailing sentence punctuation is stripped from URLs."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        text = "Visit https://example.com/page."
+        result = _extract_urls(text)
+        assert result == ["https://example.com/page"]
+
+    def test_strips_unbalanced_trailing_parens(self):
+        """Unbalanced trailing closing parentheses are stripped."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        text = "(see https://example.com/page)"
+        result = _extract_urls(text)
+        assert result == ["https://example.com/page"]
+
+    def test_preserves_balanced_parens_in_url(self):
+        """Balanced parentheses within URLs are preserved."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        text = "https://en.wikipedia.org/wiki/Test_(assessment)"
+        result = _extract_urls(text)
+        assert result == ["https://en.wikipedia.org/wiki/Test_(assessment)"]
+
+    def test_filters_api_metadata_urls(self):
+        """REST API metadata URLs are filtered out."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        text = "https://confluence.example.com/rest/api/user?key=abc https://confluence.example.com/wiki/PTO"
+        result = _extract_urls(text)
+        assert result == ["https://confluence.example.com/wiki/PTO"]
+
+    def test_empty_text_returns_empty_list(self):
+        """Empty text returns an empty list."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        assert _extract_urls("") == []
+
+    def test_text_with_no_urls_returns_empty_list(self):
+        """Text without URLs returns an empty list."""
+        from slack_agent_router.backends.rovo import _extract_urls
+
+        assert _extract_urls("No links here, just plain text.") == []
+
+
+# -------------------------------------------------------
+# _is_api_metadata_url helper
+# -------------------------------------------------------
+
+
+class TestIsApiMetadataUrl:
+    """Tests for the _is_api_metadata_url helper function."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://confluence.example.com/rest/api/user?key=abc",
+            "https://confluence.example.com/rest/api/content/12345",
+            "https://confluence.example.com/rest/api/search?cql=test",
+            "https://confluence.example.com/rest/api/space/TEAM",
+            "https://jira.example.com/rest/agile/1.0/board/5",
+        ],
+    )
+    def test_detects_api_metadata_urls(self, url):
+        """Known API metadata patterns are detected."""
+        from slack_agent_router.backends.rovo import _is_api_metadata_url
+
+        assert _is_api_metadata_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://confluence.example.com/wiki/PTO",
+            "https://confluence.example.com/display/TEAM/Page",
+            "https://jira.example.com/browse/PROJ-123",
+            "https://example.com/page",
+        ],
+    )
+    def test_allows_user_facing_urls(self, url):
+        """User-facing page URLs are not flagged as API metadata."""
+        from slack_agent_router.backends.rovo import _is_api_metadata_url
+
+        assert _is_api_metadata_url(url) is False
+
+
+# -------------------------------------------------------
+# _build_tool_args helper
+# -------------------------------------------------------
+
+
+class TestBuildToolArgs:
+    """Tests for the _build_tool_args method."""
+
+    @pytest.fixture()
+    def backend(self):
+        return RovoMCPBackend(
+            mcp_server_url="https://mcp.atlassian.com/v1/mcp",
+            api_token="test-token",
+            cloud_id="cloud-123",
+        )
+
+    def test_confluence_cql_args(self, backend):
+        """searchConfluenceUsingCql builds CQL siteSearch query."""
+        args = backend._build_tool_args("searchConfluenceUsingCql", "PTO policy")
+        assert args["cloudId"] == "cloud-123"
+        assert args["cql"] == 'siteSearch ~ "PTO policy"'
+        assert "query" not in args
+
+    def test_jira_jql_args(self, backend):
+        """searchJiraIssuesUsingJql builds JQL text query."""
+        args = backend._build_tool_args("searchJiraIssuesUsingJql", "sprint planning")
+        assert args["cloudId"] == "cloud-123"
+        assert args["jql"] == 'text ~ "sprint planning"'
+        assert "query" not in args
+
+    def test_generic_tool_args(self, backend):
+        """Unknown tool name falls back to generic query arg."""
+        args = backend._build_tool_args("someOtherTool", "test question")
+        assert args["cloudId"] == "cloud-123"
+        assert args["query"] == "test question"
+        assert "cql" not in args
+        assert "jql" not in args
+
+    def test_escapes_quotes_in_cql(self, backend):
+        """Double quotes in the question are escaped for CQL."""
+        args = backend._build_tool_args("searchConfluenceUsingCql", 'find "PTO" info')
+        assert '\\"PTO\\"' in args["cql"]
+
+    def test_escapes_quotes_in_jql(self, backend):
+        """Double quotes in the question are escaped for JQL."""
+        args = backend._build_tool_args("searchJiraIssuesUsingJql", 'find "bug" issues')
+        assert '\\"bug\\"' in args["jql"]
