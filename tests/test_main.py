@@ -16,6 +16,7 @@ import pytest
 
 from slack_agent_router.main import (
     _ATLASSIAN_CLOUD_ID_ENV,
+    _ATLASSIAN_SERVICE_USER_ENV,
     _BEDROCK_AGENT_ALIAS_ID_ENV,
     _BEDROCK_AGENT_ID_ENV,
     _CONFIG_FILE_ENV,
@@ -35,6 +36,7 @@ from slack_agent_router.main import (
 # ------------------------------------------------------------------
 
 _CONFIG_ENV_VARS = {
+    _ATLASSIAN_SERVICE_USER_ENV: "test@example.com",
     _ROVO_MCP_SERVER_URL_ENV: "https://mcp.atlassian.com/v1/mcp",
     _ATLASSIAN_CLOUD_ID_ENV: "cloud-123",
     _GCP_PROJECT_ID_ENV: "my-project",
@@ -46,6 +48,7 @@ _CONFIG_ENV_VARS = {
 }
 
 _CONFIG_FILE_VALUES = {
+    "atlassian_service_user": "test@example.com",
     "rovo_mcp_server_url": "https://mcp.atlassian.com/v1/mcp",
     "atlassian_cloud_id": "cloud-123",
     "gcp_project_id": "my-project",
@@ -228,6 +231,7 @@ class TestLoadConfigYamlFile:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             textwrap.dedent("""\
+            atlassian_service_user: test@example.com
             rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
             atlassian_cloud_id: cloud-yaml
             gcp_project_id: my-project
@@ -247,6 +251,7 @@ class TestLoadConfigYamlFile:
         config_file = tmp_path / "config.yml"
         config_file.write_text(
             textwrap.dedent("""\
+            atlassian_service_user: test@example.com
             rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
             atlassian_cloud_id: cloud-yml
             gcp_project_id: my-project
@@ -266,6 +271,7 @@ class TestLoadConfigYamlFile:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             textwrap.dedent("""\
+            atlassian_service_user: test@example.com
             rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
             atlassian_cloud_id: cloud-yaml
             gcp_project_id: my-project
@@ -354,6 +360,7 @@ class TestLoadConfigFileResolution:
         config_file = tmp_path / "partial.json"
         config_file.write_text(json.dumps(partial))
 
+        monkeypatch.setenv(_ATLASSIAN_SERVICE_USER_ENV, "test@example.com")
         monkeypatch.setenv(_VERTEX_LOCATION_ENV, "global")
         monkeypatch.setenv(_VERTEX_DATA_STORE_ID_ENV, "ds-env")
         monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "agent-env")

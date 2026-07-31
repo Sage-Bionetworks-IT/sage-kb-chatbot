@@ -69,3 +69,6 @@ cdk.out/
 # App config (may contain non-secret but environment-specific values)
 config.yaml
 config.json
+
+# temp files
+temp/

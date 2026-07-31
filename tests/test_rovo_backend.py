@@ -168,9 +168,13 @@ class TestRovoMCPResponseParsing:
 
     @given(data=mcp_tool_result_with_embedded_urls())
     @settings(max_examples=50)
-    async def test_embedded_urls_extracted_into_source_urls(self, data):
-        """For any MCP response with embedded URLs, all URLs appear in source_urls."""
-        mcp_result, _, expected_urls = data
+    async def test_source_urls_empty_for_mcp_responses(self, data):
+        """Source URLs are not extracted from MCP response text.
+
+        The Bedrock Agent curates citations in its synthesized answer,
+        so we don't extract URLs from raw backend responses.
+        """
+        mcp_result, _, _ = data
         backend = RovoMCPBackend(
             mcp_server_url="https://mcp.atlassian.com/v1/mcp",
             api_token="test-token-placeholder",
@@ -183,8 +187,7 @@ class TestRovoMCPResponseParsing:
 
         assert isinstance(result, BackendResult)
         assert result.success is True
-        for url in expected_urls:
-            assert url in result.source_urls, f"Missing URL: {url}"
+        assert result.source_urls == []
 
     @given(question=plain_word)
     @settings(max_examples=30)
@@ -393,20 +396,20 @@ class TestResolveToolName:
         result = RovoMCPBackend._resolve_tool_name(tools_response)
         assert result == "confluence_search"
 
-    def test_picks_tool_with_rovo_in_name(self):
-        """When a tool name contains 'rovo', it is selected."""
+    def test_picks_preferred_tool_over_others(self):
+        """When a preferred tool is available, it is selected over others."""
         tool_a = MagicMock()
         tool_a.name = "list_pages"
         tool_b = MagicMock()
-        tool_b.name = "rovo_query"
+        tool_b.name = "searchConfluenceUsingCql"
         tools_response = MagicMock()
         tools_response.tools = [tool_a, tool_b]
 
         result = RovoMCPBackend._resolve_tool_name(tools_response)
-        assert result == "rovo_query"
+        assert result == "searchConfluenceUsingCql"
 
     def test_falls_back_to_first_tool_when_no_search_or_rovo(self):
-        """When no tool name contains 'search' or 'rovo', the first tool is used."""
+        """When no tool name contains 'search' or preferred names, the first tool is used."""
         tool_a = MagicMock()
         tool_a.name = "list_pages"
         tool_b = MagicMock()
@@ -418,16 +421,16 @@ class TestResolveToolName:
         assert result == "list_pages"
 
     def test_falls_back_to_default_when_tools_list_empty(self):
-        """When the tools list is empty, the default _TOOL_NAME is returned."""
+        """When the tools list is empty, the first preferred tool name is returned."""
         tools_response = MagicMock()
         tools_response.tools = []
 
         result = RovoMCPBackend._resolve_tool_name(tools_response)
-        assert result == RovoMCPBackend._TOOL_NAME
+        assert result == RovoMCPBackend._PREFERRED_TOOLS[0]
 
     def test_falls_back_to_default_when_no_tools_attr(self):
-        """When the response has no tools attribute, the default _TOOL_NAME is returned."""
+        """When the response has no tools attribute, the first preferred tool name is returned."""
         tools_response = object()
 
         result = RovoMCPBackend._resolve_tool_name(tools_response)
-        assert result == RovoMCPBackend._TOOL_NAME
+        assert result == RovoMCPBackend._PREFERRED_TOOLS[0]

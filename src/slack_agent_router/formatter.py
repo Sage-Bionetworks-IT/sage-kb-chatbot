@@ -19,9 +19,7 @@ def format_answer(response: AgentResponse, elapsed_seconds: float) -> str:
             lines.append(f"{i}. <{url}>")
         parts.append("\n".join(lines))
 
-    n = len(response.source_urls)
-    label = "source" if n == 1 else "sources"
-    footer = f"_Synthesized from {n} {label} in {elapsed_seconds:.1f}s_"
+    footer = f"_Response time: {elapsed_seconds:.1f}s_"
     parts.append(footer)
 
     return "\n\n".join(parts)

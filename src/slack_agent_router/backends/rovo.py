@@ -7,6 +7,7 @@ to connect to the Rovo MCP Server and execute tool calls.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 import time
@@ -37,11 +38,13 @@ class RovoMCPBackend:
         mcp_server_url: str,
         api_token: str,
         cloud_id: str,
+        service_user: str = "",
         timeout_seconds: float = 15.0,
     ) -> None:
         self._mcp_server_url = mcp_server_url
         self._api_token = api_token
         self._cloud_id = cloud_id
+        self._service_user = service_user
         self._timeout_seconds = timeout_seconds
         self._cached_tool_name: str | None = None
 
@@ -112,12 +115,31 @@ class RovoMCPBackend:
             return False
         return True
 
-    async def _ping_server(self) -> None:
-        """Open a connection and call list_tools() as a lightweight liveness check."""
-        headers = {
+    def _build_auth_headers(self) -> dict[str, str]:
+        """Build authentication headers for the MCP server.
+
+        A service user can only authenticate with basic auth while
+        an atlassian org admin provisioned service account can authenticate
+        with a bearer token.
+
+        Uses Basic auth (email:token base64-encoded) when service_user
+        is configured, otherwise falls back to Bearer token.
+        """
+        if self._service_user:
+            credentials = f"{self._service_user}:{self._api_token}"
+            encoded = base64.b64encode(credentials.encode()).decode()
+            return {
+                "Authorization": f"Basic {encoded}",
+                "x-cloud-id": self._cloud_id,
+            }
+        return {
             "Authorization": f"Bearer {self._api_token}",
             "x-cloud-id": self._cloud_id,
         }
+
+    async def _ping_server(self) -> None:
+        """Open a connection and call list_tools() as a lightweight liveness check."""
+        headers = self._build_auth_headers()
         async with streamablehttp_client(
             url=self._mcp_server_url,
             headers=headers,
@@ -134,14 +156,10 @@ class RovoMCPBackend:
         """Connect to the MCP server and call the search tool.
 
         Opens a fresh Streamable HTTP connection, initialises the
-        session, and invokes the tool.  Uses a cached tool name when
-        available to skip the list_tools() round-trip. Falls back to
-        re-discovery if the cached tool name fails.
+        session, and invokes the tool.  The connection is closed when
+        the context managers exit.
         """
-        headers = {
-            "Authorization": f"Bearer {self._api_token}",
-            "x-cloud-id": self._cloud_id,
-        }
+        headers = self._build_auth_headers()
 
         async with streamablehttp_client(
             url=self._mcp_server_url,
@@ -150,47 +168,66 @@ class RovoMCPBackend:
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
 
-                # Use cached tool name or discover it
-                if self._cached_tool_name is None:
-                    tools_response = await session.list_tools()
-                    self._cached_tool_name = self._resolve_tool_name(tools_response)
-
-                result = await session.call_tool(
-                    self._cached_tool_name,
-                    {"query": question},
+                tools_response = await session.list_tools()
+                tool_name = self._resolve_tool_name(tools_response)
+                logger.info(
+                    "Available MCP tools: %s — selected: %s",
+                    [t.name for t in (tools_response.tools or [])],
+                    tool_name,
                 )
 
-                # If the cached tool failed, re-discover and retry once
-                if result.isError and self._cached_tool_name:
-                    logger.info("Cached tool %s failed, re-discovering tools", self._cached_tool_name)
-                    tools_response = await session.list_tools()
-                    new_tool_name = self._resolve_tool_name(tools_response)
-                    if new_tool_name != self._cached_tool_name:
-                        self._cached_tool_name = new_tool_name
-                        result = await session.call_tool(
-                            self._cached_tool_name,
-                            {"query": question},
-                        )
+                # Build arguments based on the selected tool
+                tool_args = self._build_tool_args(tool_name, question)
 
+                result = await session.call_tool(tool_name, tool_args)
                 return result
+
+    # Preferred tools in priority order — first match wins.
+    _PREFERRED_TOOLS = ("searchConfluenceUsingCql", "searchJiraIssuesUsingJql")
 
     @classmethod
     def _resolve_tool_name(cls, tools_response: ListToolsResult) -> str:
         """Pick the best search tool from the server's tool list.
 
-        Falls back to the first available tool if no obvious search
-        tool is found.
+        Prefers searchConfluenceUsingCql, then searchJiraIssuesUsingJql,
+        then any tool with "search" in the name, then falls back to the
+        first available tool.
         """
         if not hasattr(tools_response, "tools") or not tools_response.tools:
-            return cls._TOOL_NAME
+            return cls._PREFERRED_TOOLS[0]
 
+        available = {t.name for t in tools_response.tools}
+
+        # Check preferred tools first
+        for preferred in cls._PREFERRED_TOOLS:
+            if preferred in available:
+                return preferred
+
+        # Fall back to any tool with "search" in the name
         for tool in tools_response.tools:
-            name_lower = tool.name.lower()
-            if "search" in name_lower or "rovo" in name_lower:
+            if "search" in tool.name.lower():
                 return tool.name
 
         logger.warning("No search tool found in MCP tools list, falling back to: %s", tools_response.tools[0].name)
         return tools_response.tools[0].name
+
+    def _build_tool_args(self, tool_name: str, question: str) -> dict[str, str]:
+        """Build the correct arguments for the selected MCP tool."""
+        args: dict[str, str] = {"cloudId": self._cloud_id}
+
+        if tool_name == "searchConfluenceUsingCql":
+            # CQL text search: siteSearch ~ "question text"
+            escaped = question.replace('"', '\\"')
+            args["cql"] = f'siteSearch ~ "{escaped}"'
+        elif tool_name == "searchJiraIssuesUsingJql":
+            # JQL text search
+            escaped = question.replace('"', '\\"')
+            args["jql"] = f'text ~ "{escaped}"'
+        else:
+            # Generic fallback
+            args["query"] = question
+
+        return args
 
     def _parse_mcp_result(self, mcp_result: CallToolResult, start: float) -> BackendResult:
         """Convert an MCP tool result into a BackendResult."""
@@ -216,7 +253,7 @@ class RovoMCPBackend:
                 latency_ms=_elapsed_ms(start),
             )
 
-        source_urls = _extract_urls(answer_text)
+        source_urls: list[str] = []
 
         return BackendResult(
             backend_name=self.name,
@@ -240,11 +277,12 @@ class RovoMCPBackend:
 
 
 def _extract_urls(text: str) -> list[str]:
-    """Extract all HTTP(S) URLs from text, preserving order and removing duplicates.
+    """Extract user-facing URLs from text, filtering out API metadata.
 
     Handles URLs with parentheses (common in wiki/Jira links) by
-    stripping only unbalanced trailing closing parens. Also strips
-    trailing sentence punctuation.
+    stripping only unbalanced trailing closing parens. Filters out
+    REST API endpoints (user lookups, content history, search queries)
+    that are internal metadata rather than user-facing page links.
     """
     raw = _URL_PATTERN.findall(text)
     cleaned: list[str] = []
@@ -254,8 +292,30 @@ def _extract_urls(text: str) -> list[str]:
         # Strip unbalanced trailing closing parens
         while url.endswith(")") and url.count(")") > url.count("("):
             url = url[:-1]
+        # Filter out REST API metadata URLs
+        if _is_api_metadata_url(url):
+            continue
         cleaned.append(url)
     return list(dict.fromkeys(cleaned))
+
+
+# Patterns that indicate an internal API/metadata URL rather than
+# a user-facing page link.
+_API_METADATA_PATTERNS = (
+    "/rest/api/user",
+    "/rest/api/content/",
+    "/rest/api/search",
+    "/rest/api/space",
+    "/rest/agile/",
+)
+
+
+def _is_api_metadata_url(url: str) -> bool:
+    """Return True if the URL is an internal API endpoint, not a user-facing page."""
+    for pattern in _API_METADATA_PATTERNS:
+        if pattern in url:
+            return True
+    return False
 
 
 def _elapsed_ms(start: float) -> float:
