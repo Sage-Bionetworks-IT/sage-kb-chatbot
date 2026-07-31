@@ -6,7 +6,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
 
 ## Tasks
 
-- [ ] 1. Set up project structure, data models, and shared utilities
+- [x] 1. Set up project structure, data models, and shared utilities
   - [x] 1.1 Create project directory structure and configuration files
     - Create `src/slack_agent_router/` package with `__init__.py`
     - Create `pyproject.toml` with dependencies: slack-bolt, slack-sdk, httpx, aiohttp, mcp, google-cloud-discoveryengine, google-auth, pydantic, boto3, hypothesis, pytest, pytest-asyncio
@@ -50,7 +50,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run property tests from 1.5 — all must pass
     - _Requirements: 9.1, 10.7_
 
-- [ ] 2. Implement structured logging and audit trail
+- [x] 2. Implement structured logging and audit trail
   - [x] 2.1 Write property tests for audit logging (RED)
     - **Property 14: Audit log structure and completeness** — for any QueryAuditRecord, the emitted log is valid JSON with all required fields
     - **Property 15: No secrets in log output** — for any log entry, the output does not contain API tokens, secrets, or credentials even if present in input data
@@ -67,7 +67,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run property tests from 2.1 — all must pass
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6_
 
-- [ ] 3. Implement rate limiter
+- [x] 3. Implement rate limiter
   - [x] 3.1 Write property tests for rate limiter (RED)
     - **Property 3: Per-user rate limit window enforcement** — for any user at the window limit, the next request is rejected with a non-empty reason
     - **Property 4: Per-user in-flight concurrency limit** — if a request is in-flight, subsequent requests are rejected; after release, next request is accepted
@@ -86,10 +86,10 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run property tests from 3.1 — all must pass
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.8_
 
-- [ ] 4. Checkpoint - Ensure all tests pass
+- [x] 4. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 5. Implement Rovo MCP backend
+- [x] 5. Implement Rovo MCP backend
   - [x] 5.1 Write tests for RovoMCPBackend (RED)
     - **Property 10: Rovo MCP response parsing completeness** — for any valid MCP response, the backend produces a BackendResult with success=True, answer text, and all source URLs
     - Unit tests: auth failure returns BackendResult with success=False, timeout returns BackendResult with success=False, health_check returns boolean
@@ -151,10 +151,10 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run all tests from 7.1 — all must pass
     - _Requirements: 6.1, 6.2, 6.3_
 
-- [ ] 8. Checkpoint - Ensure all tests pass
+- [x] 8. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 9. Implement Slack Socket Mode application
+- [x] 9. Implement Slack Socket Mode application
   - [x] 9.1 Write tests for SlackAgentApp (RED)
     - **Property 1: Event deduplication prevents reprocessing** — submitting the same event ID within 60s returns duplicate; unseen IDs are accepted
     - **Property 2: Bot mention prefix stripping** — for any text with bot mention prefix, the extracted question does not contain the prefix and preserves the rest
@@ -188,7 +188,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Start health check and Socket Mode concurrently with asyncio.gather
     - _Requirements: 14.5_
 
-- [ ] 11. End-to-end manual testing checkpoint
+- [x] 11. End-to-end manual testing checkpoint
   - Run the bot locally with real Slack credentials and verify question → answer flow works end-to-end
   - Test app_mention, DM, and /sage-ask slash command inputs
   - Verify answers are posted as thread replies with citations
