@@ -118,6 +118,10 @@ class RovoMCPBackend:
     def _build_auth_headers(self) -> dict[str, str]:
         """Build authentication headers for the MCP server.
 
+        A service user can only authenticate with basic auth while
+        an atlassian org admin provisioned service account can authenticate
+        with a bearer token.
+
         Uses Basic auth (email:token base64-encoded) when service_user
         is configured, otherwise falls back to Bearer token.
         """
