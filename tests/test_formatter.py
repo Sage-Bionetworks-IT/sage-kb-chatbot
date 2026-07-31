@@ -29,7 +29,7 @@ url_path = st.text(
     max_size=20,
 )
 
-system_name = st.sampled_from(["Confluence", "Jira", "Google Sites"])
+system_name = st.sampled_from(["Confluence", "Jira"])
 
 source_entry = st.fixed_dictionaries(
     {

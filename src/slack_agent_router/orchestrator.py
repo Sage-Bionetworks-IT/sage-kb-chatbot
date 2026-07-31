@@ -27,7 +27,6 @@ _TOTAL_TIMEOUT_SECONDS = 30.0
 
 # Action group → backend mapping keys
 _ACTION_GROUP_ROVO = "SearchConfluenceJira"
-_ACTION_GROUP_VERTEX = "SearchGoogleSites"
 
 
 class _Backend(Protocol):
@@ -67,7 +66,6 @@ class BedrockAgentOrchestrator:
         agent_id: str,
         agent_alias_id: str,
         rovo_backend: _Backend,
-        vertex_backend: _Backend,
         max_iterations: int = _MAX_ITERATIONS,
         timeout_seconds: float = _TOTAL_TIMEOUT_SECONDS,
     ) -> None:
@@ -75,7 +73,6 @@ class BedrockAgentOrchestrator:
         self._agent_alias_id = agent_alias_id
         self._backends: dict[str, _Backend] = {
             _ACTION_GROUP_ROVO: rovo_backend,
-            _ACTION_GROUP_VERTEX: vertex_backend,
         }
         self._max_iterations = max_iterations
         self._timeout_seconds = timeout_seconds
@@ -121,7 +118,7 @@ class BedrockAgentOrchestrator:
               execute tool calls locally (e.g., search Confluence).
            c. Otherwise → unexpected format, return fallback.
         3. For each tool request in returnControl:
-           - Map the action group name to a backend (Rovo, Vertex).
+           - Map the action group name to a backend (Rovo).
            - Execute the backend query.
            - Cache the result (for dedup and fallback).
            - Build the result payload to send back to the agent.

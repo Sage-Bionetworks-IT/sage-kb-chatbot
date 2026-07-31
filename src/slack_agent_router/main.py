@@ -36,9 +36,6 @@ _DEFAULT_CONFIG_PATHS = ("config.yaml", "config.json")
 _ATLASSIAN_SERVICE_USER_ENV = "ATLASSIAN_SERVICE_USER"
 _ROVO_MCP_SERVER_URL_ENV = "ROVO_MCP_SERVER_URL"
 _ATLASSIAN_CLOUD_ID_ENV = "ATLASSIAN_CLOUD_ID"
-_GCP_PROJECT_ID_ENV = "GCP_PROJECT_ID"
-_VERTEX_LOCATION_ENV = "VERTEX_LOCATION"
-_VERTEX_DATA_STORE_ID_ENV = "VERTEX_DATA_STORE_ID"
 _BEDROCK_AGENT_ID_ENV = "BEDROCK_AGENT_ID"
 _BEDROCK_AGENT_ALIAS_ID_ENV = "BEDROCK_AGENT_ALIAS_ID"
 _SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"
@@ -48,9 +45,6 @@ _ENV_MAP: dict[str, str] = {
     "atlassian_service_user": _ATLASSIAN_SERVICE_USER_ENV,
     "rovo_mcp_server_url": _ROVO_MCP_SERVER_URL_ENV,
     "atlassian_cloud_id": _ATLASSIAN_CLOUD_ID_ENV,
-    "gcp_project_id": _GCP_PROJECT_ID_ENV,
-    "vertex_location": _VERTEX_LOCATION_ENV,
-    "vertex_data_store_id": _VERTEX_DATA_STORE_ID_ENV,
     "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
     "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
     "secret_id": _SECRET_ID_ENV,
@@ -64,9 +58,6 @@ class AppConfig:
     atlassian_service_user: str
     rovo_mcp_server_url: str
     atlassian_cloud_id: str
-    gcp_project_id: str
-    vertex_location: str
-    vertex_data_store_id: str
     bedrock_agent_id: str
     bedrock_agent_alias_id: str
     secret_id: str
@@ -91,9 +82,6 @@ def load_config(config_path: str | None = None) -> AppConfig:
 
     * ``ROVO_MCP_SERVER_URL``    — Rovo MCP Server endpoint URL
     * ``ATLASSIAN_CLOUD_ID``     — Atlassian Cloud instance ID
-    * ``GCP_PROJECT_ID``         — GCP project hosting Vertex AI Search
-    * ``VERTEX_LOCATION``        — Vertex AI Search location (e.g. "global")
-    * ``VERTEX_DATA_STORE_ID``   — Vertex AI Search data store ID
     * ``BEDROCK_AGENT_ID``       — Amazon Bedrock Agent ID
     * ``BEDROCK_AGENT_ALIAS_ID`` — Amazon Bedrock Agent alias ID
     * ``SLACK_AGENT_ROUTER_SECRET_ID`` — Secrets Manager secret name or ARN
@@ -220,7 +208,6 @@ async def load_secrets(secret_id: str) -> dict[str, Any]:
     * ``slack_bot_token``      — Slack Bot User OAuth Token (xoxb-…)
     * ``slack_app_token``      — Slack App-Level Token for Socket Mode (xapp-…)
     * ``atlassian_api_token``  — Atlassian API token for Rovo MCP
-    * ``gcp_service_account``  — GCP service account credentials (JSON object)
 
     Args:
         secret_id: Secrets Manager secret name or ARN. Typically
@@ -246,16 +233,6 @@ async def load_secrets(secret_id: str) -> dict[str, Any]:
     if not isinstance(secrets, dict):
         raise RuntimeError(f"Secret value must be a JSON object, got {type(secrets).__name__}")
 
-    # If gcp_service_account is stored as a JSON string rather than a
-    # nested object, parse it into a dict so the Vertex backend can
-    # consume it directly.
-    gcp_sa = secrets.get("gcp_service_account")
-    if isinstance(gcp_sa, str):
-        try:
-            secrets["gcp_service_account"] = json.loads(gcp_sa)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"gcp_service_account is not valid JSON: {exc}") from exc
-
     _validate_required_secret_keys(secrets)
     return secrets
 
@@ -264,7 +241,6 @@ _REQUIRED_SECRET_KEYS = (
     "slack_bot_token",
     "slack_app_token",
     "atlassian_api_token",
-    "gcp_service_account",
 )
 
 
@@ -341,7 +317,6 @@ async def main() -> None:
 
     # --- Backends ---------------------------------------------------
     from slack_agent_router.backends.rovo import RovoMCPBackend
-    from slack_agent_router.backends.vertex import VertexAISearchBackend
 
     rovo_backend = RovoMCPBackend(
         mcp_server_url=config.rovo_mcp_server_url,
@@ -350,14 +325,7 @@ async def main() -> None:
         service_user=config.atlassian_service_user,
     )
 
-    vertex_backend = VertexAISearchBackend(
-        project_id=config.gcp_project_id,
-        location=config.vertex_location,
-        data_store_id=config.vertex_data_store_id,
-        service_account_credentials=secrets["gcp_service_account"],
-    )
-
-    backends = [rovo_backend, vertex_backend]
+    backends = [rovo_backend]
 
     # --- Orchestrator -----------------------------------------------
     from slack_agent_router.orchestrator import BedrockAgentOrchestrator
@@ -366,7 +334,6 @@ async def main() -> None:
         agent_id=config.bedrock_agent_id,
         agent_alias_id=config.bedrock_agent_alias_id,
         rovo_backend=rovo_backend,
-        vertex_backend=vertex_backend,
     )
 
     # --- Rate limiter -----------------------------------------------

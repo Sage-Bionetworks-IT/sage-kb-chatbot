@@ -37,7 +37,7 @@ channel_id = st.text(
 
 question_text = st.text(min_size=1, max_size=200).filter(lambda s: s.strip() != "")
 
-backend_name = st.sampled_from(["Atlassian Rovo (Confluence/Jira)", "Google Sites (Vertex AI Search)"])
+backend_name = st.sampled_from(["Atlassian Rovo (Confluence/Jira)"])
 
 timestamp_str = st.from_regex(r"2025-0[1-9]-[0-2][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z", fullmatch=True)
 
