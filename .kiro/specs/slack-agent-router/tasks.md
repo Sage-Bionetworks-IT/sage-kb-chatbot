@@ -86,7 +86,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run property tests from 3.1 — all must pass
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.8_
 
-- [ ] 4. Checkpoint - Ensure all tests pass
+- [x] 4. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 5. Implement Rovo MCP backend
@@ -151,7 +151,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run all tests from 7.1 — all must pass
     - _Requirements: 6.1, 6.2, 6.3_
 
-- [ ] 8. Checkpoint - Ensure all tests pass
+- [x] 8. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 9. Implement Slack Socket Mode application
@@ -188,7 +188,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Start health check and Socket Mode concurrently with asyncio.gather
     - _Requirements: 14.5_
 
-- [ ] 11. End-to-end manual testing checkpoint
+- [x] 11. End-to-end manual testing checkpoint
   - Run the bot locally with real Slack credentials and verify question → answer flow works end-to-end
   - Test app_mention, DM, and /sage-ask slash command inputs
   - Verify answers are posted as thread replies with citations
