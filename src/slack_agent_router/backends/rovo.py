@@ -238,12 +238,12 @@ class RovoMCPBackend:
         are errors, returns the first error.
         """
         if not results:
-            from unittest.mock import MagicMock as _MagicMock
+            from mcp.types import TextContent
 
-            mock_result = _MagicMock()
-            mock_result.isError = True
-            mock_result.content = []
-            return mock_result
+            return CallToolResult(
+                content=[TextContent(type="text", text="")],
+                isError=True,
+            )
 
         if len(results) == 1:
             return results[0]
@@ -262,10 +262,7 @@ class RovoMCPBackend:
             if hasattr(result, "content") and result.content:
                 merged_content.extend(result.content)
 
-        # Return first successful result with merged content
-        merged = successes[0]
-        merged.content = merged_content
-        return merged
+        return CallToolResult(content=merged_content, isError=False)
 
     def _build_tool_args(self, tool_name: str, question: str) -> dict[str, str]:
         """Build the correct arguments for the selected MCP tool."""
