@@ -1,4 +1,4 @@
-"""Property and unit tests for BedrockAgentOrchestrator (RED).
+"""Property and unit tests for BedrockAgentOrchestrator.
 
 Property 6: Return control loop iteration bound
 Property 7: Return control loop duplicate tool call detection
@@ -6,9 +6,6 @@ Property 8: Action group to backend mapping correctness
 Property 9: Session ID derivation from Slack thread context
 
 Unit tests: agent failure before/after tool calls, timeout enforcement.
-
-These tests should FAIL until tasks 7.2 and 7.3 implement the
-orchestrator.
 """
 
 from __future__ import annotations
@@ -39,8 +36,6 @@ user_id = st.text(
 channel_id = st.from_regex(r"C[A-Z0-9]{8}", fullmatch=True)
 thread_ts = st.from_regex(r"[0-9]{10}\.[0-9]{6}", fullmatch=True)
 message_ts = st.from_regex(r"[0-9]{10}\.[0-9]{6}", fullmatch=True)
-
-action_group_name = st.sampled_from(["SearchConfluenceJira", "SearchGoogleSites"])
 
 question_text = st.text(min_size=1, max_size=100).filter(lambda s: s.strip() != "")
 
@@ -115,15 +110,7 @@ def rovo_backend() -> AsyncMock:
 
 
 @pytest.fixture()
-def vertex_backend() -> AsyncMock:
-    backend = AsyncMock()
-    backend.name = "Google Sites (Vertex AI Search)"
-    backend.query = AsyncMock(return_value=_make_backend_result("Google Sites (Vertex AI Search)"))
-    return backend
-
-
-@pytest.fixture()
-def orchestrator(rovo_backend, vertex_backend):
+def orchestrator(rovo_backend):
     """Create an orchestrator with mocked backends."""
     from slack_agent_router.orchestrator import BedrockAgentOrchestrator
 
@@ -131,7 +118,6 @@ def orchestrator(rovo_backend, vertex_backend):
         agent_id="test-agent-id",
         agent_alias_id="test-alias-id",
         rovo_backend=rovo_backend,
-        vertex_backend=vertex_backend,
     )
 
 
@@ -191,15 +177,11 @@ class TestReturnControlLoopIterationBound:
         rb = AsyncMock()
         rb.name = "Atlassian Rovo (Confluence/Jira)"
         rb.query = AsyncMock(return_value=_make_backend_result("Atlassian Rovo (Confluence/Jira)"))
-        vb = AsyncMock()
-        vb.name = "Google Sites (Vertex AI Search)"
-        vb.query = AsyncMock(return_value=_make_backend_result("Google Sites (Vertex AI Search)"))
 
         orch = BedrockAgentOrchestrator(
             agent_id="test-agent-id",
             agent_alias_id="test-alias-id",
             rovo_backend=rb,
-            vertex_backend=vb,
         )
         call_count = 0
 
@@ -276,15 +258,11 @@ class TestDuplicateToolCallDetection:
         rb = AsyncMock()
         rb.name = "Atlassian Rovo (Confluence/Jira)"
         rb.query = AsyncMock(return_value=_make_backend_result("Atlassian Rovo (Confluence/Jira)"))
-        vb = AsyncMock()
-        vb.name = "Google Sites (Vertex AI Search)"
-        vb.query = AsyncMock(return_value=_make_backend_result("Google Sites (Vertex AI Search)"))
 
         orch = BedrockAgentOrchestrator(
             agent_id="test-agent-id",
             agent_alias_id="test-alias-id",
             rovo_backend=rb,
-            vertex_backend=vb,
         )
         responses = [
             _make_return_control_response("SearchConfluenceJira", "find_content", {"query": query}),
@@ -313,7 +291,7 @@ class TestDuplicateToolCallDetection:
 class TestActionGroupToBackendMapping:
     """Property 8: action groups map to correct backends."""
 
-    async def test_search_confluence_jira_maps_to_rovo(self, orchestrator, rovo_backend, vertex_backend):
+    async def test_search_confluence_jira_maps_to_rovo(self, orchestrator, rovo_backend):
         """SearchConfluenceJira dispatches to Rovo backend."""
         responses = [
             _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
@@ -331,66 +309,6 @@ class TestActionGroupToBackendMapping:
             await orchestrator.ask("What is PTO?", "C123:1234567890.123456")
 
         rovo_backend.query.assert_called_once()
-        vertex_backend.query.assert_not_called()
-
-    async def test_search_google_sites_maps_to_vertex(self, orchestrator, rovo_backend, vertex_backend):
-        """SearchGoogleSites dispatches to Vertex backend."""
-        responses = [
-            _make_return_control_response("SearchGoogleSites", "find_content", {"query": "handbook"}),
-            _make_final_response("Handbook info."),
-        ]
-        call_idx = 0
-
-        async def _invoke_side_effect(*args, **kwargs):
-            nonlocal call_idx
-            resp = responses[min(call_idx, len(responses) - 1)]
-            call_idx += 1
-            return resp
-
-        with patch.object(orchestrator, "_invoke_agent", side_effect=_invoke_side_effect):
-            await orchestrator.ask("Where is the handbook?", "C123:1234567890.123456")
-
-        vertex_backend.query.assert_called_once()
-        rovo_backend.query.assert_not_called()
-
-    @given(ag=action_group_name, query=question_text)
-    @settings(max_examples=10)
-    async def test_mapping_is_deterministic(self, ag, query):
-        """For any valid action group, the mapping is deterministic."""
-        from slack_agent_router.orchestrator import BedrockAgentOrchestrator
-
-        rb = AsyncMock()
-        rb.name = "Atlassian Rovo (Confluence/Jira)"
-        rb.query = AsyncMock(return_value=_make_backend_result("Atlassian Rovo (Confluence/Jira)"))
-        vb = AsyncMock()
-        vb.name = "Google Sites (Vertex AI Search)"
-        vb.query = AsyncMock(return_value=_make_backend_result("Google Sites (Vertex AI Search)"))
-
-        orch = BedrockAgentOrchestrator(
-            agent_id="test-agent-id",
-            agent_alias_id="test-alias-id",
-            rovo_backend=rb,
-            vertex_backend=vb,
-        )
-        responses = [
-            _make_return_control_response(ag, "find_content", {"query": query}),
-            _make_final_response("Answer."),
-        ]
-        call_idx = 0
-
-        async def _invoke_side_effect(*args, **kwargs):
-            nonlocal call_idx
-            resp = responses[min(call_idx, len(responses) - 1)]
-            call_idx += 1
-            return resp
-
-        with patch.object(orch, "_invoke_agent", side_effect=_invoke_side_effect):
-            await orch.ask(query, "C123:1234567890.123456")
-
-        if ag == "SearchConfluenceJira":
-            rb.query.assert_called()
-        else:
-            vb.query.assert_called()
 
     async def test_unknown_action_group_returns_error_tool_output(self, orchestrator):
         """Unknown action group produces a failed ToolOutput, not an exception."""
@@ -520,7 +438,7 @@ class TestAgentFailureBeforeToolCalls:
         assert isinstance(result, AgentResponse)
         assert "trouble" in result.answer.lower() or "error" in result.answer.lower() or len(result.answer) > 0
 
-    async def test_no_tool_calls_recorded(self, orchestrator, rovo_backend, vertex_backend):
+    async def test_no_tool_calls_recorded(self, orchestrator, rovo_backend):
         """No backend calls should be made when agent fails immediately."""
 
         async def _invoke_side_effect(*args, **kwargs):
@@ -530,7 +448,6 @@ class TestAgentFailureBeforeToolCalls:
             result = await orchestrator.ask("What is PTO?", "C123:1234567890.123456")
 
         rovo_backend.query.assert_not_called()
-        vertex_backend.query.assert_not_called()
         assert result.tool_calls_made == []
 
 
@@ -636,28 +553,6 @@ class TestHappyPath:
 
         assert result.answer == "PTO is 20 days per year."
         assert "SearchConfluenceJira" in result.tool_calls_made
-
-    async def test_two_tool_calls_flow(self, orchestrator, rovo_backend, vertex_backend):
-        """Question → two tool calls → final answer."""
-        responses = [
-            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
-            _make_return_control_response("SearchGoogleSites", "find_content", {"query": "PTO"}),
-            _make_final_response("PTO is 20 days. See handbook."),
-        ]
-        call_idx = 0
-
-        async def _invoke_side_effect(*args, **kwargs):
-            nonlocal call_idx
-            resp = responses[min(call_idx, len(responses) - 1)]
-            call_idx += 1
-            return resp
-
-        with patch.object(orchestrator, "_invoke_agent", side_effect=_invoke_side_effect):
-            result = await orchestrator.ask("What is PTO?", "C123:1234567890.123456")
-
-        assert result.answer == "PTO is 20 days. See handbook."
-        assert "SearchConfluenceJira" in result.tool_calls_made
-        assert "SearchGoogleSites" in result.tool_calls_made
 
     async def test_direct_answer_no_tool_calls(self, orchestrator):
         """Agent answers directly without tool calls."""

@@ -6,7 +6,7 @@ inclusion: always
 
 ## Async I/O
 
-- Use `async/await` for all external calls (Slack, MCP, Bedrock, Vertex AI)
+- Use `async/await` for all external calls (Slack, MCP, Bedrock)
 - Use `asyncio.gather()` for independent concurrent backend calls
 - Never call blocking I/O in async handlers — see `async-patterns.md`
 - Set per-call timeouts on every external request (`asyncio.wait_for`)

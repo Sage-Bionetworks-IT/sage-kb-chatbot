@@ -6,9 +6,8 @@ The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives
 
 The Bedrock Agent acts as the brain of the system — it decides which knowledge sources to query for each question, orchestrates the tool calls via the return control pattern, and synthesizes a single answer from the combined results. The application code handles Slack interaction, backend API execution, and operational concerns (rate limiting, health checks, logging). This separation means routing logic, prompt engineering, and answer synthesis are managed by Bedrock, while backend integrations and infrastructure are managed by our code.
 
-For MVP, two knowledge backends are configured as Bedrock Agent action groups:
+For MVP, one knowledge backend is configured as a Bedrock Agent action group:
 - Atlassian Rovo MCP Server — searches Confluence and Jira content
-- Google Vertex AI Search — searches the company Google Sites website
 
 The architecture uses Slack Socket Mode to receive events over a persistent WebSocket connection, eliminating the need for a public HTTP endpoint. A single ECS Fargate service handles event reception, Bedrock Agent interaction, backend execution, and response posting. This makes the system simple to operate, secure by default (no public attack surface), and straightforward to extend.
 
@@ -24,7 +23,7 @@ Adding a new backend means creating a new `RETURN_CONTROL` action group on the B
 - **No public endpoint** — Slack pushes events over a WebSocket connection initiated by the bot. No API Gateway, no public URL, no attack surface to defend.
 - **Simpler architecture** — One ECS Fargate service replaces API Gateway + Ingress Lambda + SQS + Router Lambda. Less infrastructure to build, deploy, and monitor.
 - **Secure by default** — No need for WAF, IP restrictions, or signature verification. The WebSocket connection is authenticated by Slack using an app-level token.
-- **Good fit for this workload** — Backend queries are lightweight HTTP calls (Rovo + Vertex AI Search), not heavy compute. A single process handles everything.
+- **Good fit for this workload** — Backend queries are lightweight HTTP calls (Rovo MCP), not heavy compute. A single process handles everything.
 
 ### Slack's 3-Second Acknowledgment
 
@@ -47,7 +46,6 @@ sequenceDiagram
     participant ECS as ECS Fargate (Socket Mode)
     participant BA as Bedrock Agent
     participant RV as Rovo MCP Server
-    participant GS as Vertex AI Search
 
     U->>S: @bot What is our PTO policy?
     S->>ECS: WebSocket event (app_mention)
@@ -56,10 +54,6 @@ sequenceDiagram
     BA->>ECS: Return control (SearchConfluenceJira, params)
     ECS->>RV: MCP tool call (search/summarize)
     RV-->>ECS: Confluence/Jira results
-    ECS->>BA: InvokeAgent (returnControlInvocationResults)
-    BA->>ECS: Return control (SearchGoogleSites, params)
-    ECS->>GS: Vertex AI Search API (query)
-    GS-->>ECS: Search results + AI summary
     ECS->>BA: InvokeAgent (returnControlInvocationResults)
     BA-->>ECS: Final synthesized answer with citations
     ECS->>S: chat.postMessage (synthesized answer)
@@ -73,7 +67,6 @@ sequenceDiagram
     participant ECS as ECS Fargate (Socket Mode)
     participant BA as Bedrock Agent
     participant RV as Rovo MCP Server
-    participant GS as Vertex AI Search
     participant S as Slack Platform
 
     ECS->>BA: InvokeAgent (question)
@@ -81,12 +74,8 @@ sequenceDiagram
     ECS->>RV: MCP tool call (search/summarize)
     RV--xECS: 500 / timeout
     ECS->>BA: InvokeAgent (returnControlInvocationResults: error)
-    BA->>ECS: Return control (SearchGoogleSites, params)
-    ECS->>GS: Vertex AI Search API (query)
-    GS-->>ECS: Search results + AI summary
-    ECS->>BA: InvokeAgent (returnControlInvocationResults)
-    BA-->>ECS: Partial answer + "Rovo unavailable" note
-    ECS->>S: chat.postMessage (partial answer)
+    BA-->>ECS: Answer noting "Rovo unavailable"
+    ECS->>S: chat.postMessage (error message)
 ```
 
 ### Connection Lifecycle
@@ -172,7 +161,7 @@ class SlackAgentApp:
 - Strip bot mention prefix from message text
 - Provide progressive feedback to the user:
   1. Immediately add 👀 (eyes) reaction to the user's message (~0-1s)
-  2. Post a placeholder message with ⏳ and a generic searching indicator, e.g., "⏳ Thinking..." (~1-3s). Update the message as each tool is invoked during the return control loop, e.g., "⏳ Searching Confluence and Jira..." → "⏳ Searching Google Sites..."
+  2. Post a placeholder message with ⏳ and a generic searching indicator, e.g., "⏳ Thinking..." (~1-3s). Update the message as each tool is invoked during the return control loop, e.g., "⏳ Searching Confluence and Jira..."
   3. Update the placeholder message with the final synthesized answer via `chat.update` when complete
   4. Remove the 👀 reaction and add ✅ when the answer is posted
 - Dispatch to the BedrockAgentOrchestrator for processing
@@ -194,7 +183,7 @@ class SlackAgentApp:
 1. The Socket Mode app sends the user's question to the Bedrock Agent via `InvokeAgent`
 2. The agent decides which action groups (tools) to call based on the question
 3. Instead of calling a Lambda, the agent returns control to our application with the tool name and parameters (`RETURN_CONTROL`)
-4. Our application executes the backend call (Rovo MCP, Vertex AI Search) and sends the results back to the agent via another `InvokeAgent` call with `returnControlInvocationResults`
+4. Our application executes the backend call (Rovo MCP) and sends the results back to the agent via another `InvokeAgent` call with `returnControlInvocationResults`
 5. The agent synthesizes a final answer from the tool results and returns it
 6. Our application formats and posts the answer to Slack
 
@@ -202,7 +191,6 @@ class SlackAgentApp:
 - Model: Claude Sonnet (primary) via Bedrock
 - Action Groups:
   - `SearchConfluenceJira` — configured with `RETURN_CONTROL`, describes searching Confluence and Jira via Rovo
-  - `SearchGoogleSites` — configured with `RETURN_CONTROL`, describes searching the company Google Sites website
 - Agent instructions: grounding rules, citation requirements, conflict handling, refusal when no information found
 
 **Interface**:
@@ -227,14 +215,12 @@ class BedrockAgentOrchestrator:
         agent_id: str,
         agent_alias_id: str,
         rovo_backend: "RovoMCPBackend",
-        vertex_backend: "VertexAISearchBackend",
     ):
         """
         Args:
             agent_id: Bedrock Agent ID
             agent_alias_id: Bedrock Agent alias ID
             rovo_backend: Backend for executing Rovo MCP calls
-            vertex_backend: Backend for executing Vertex AI Search calls
         """
         ...
 
@@ -275,7 +261,7 @@ class BedrockAgentOrchestrator:
 **Responsibilities**:
 - Invoke the Bedrock Agent with user questions
 - Handle the return control loop: receive tool requests, execute them locally, send results back
-- Map action group names to backend implementations (Rovo MCP, Vertex AI Search)
+- Map action group names to backend implementations (Rovo MCP)
 - Parse the agent's final synthesized response
 - Handle agent errors (throttling, timeout, invalid response)
 - Maintain session context per Slack thread (using `session_id` derived from `thread_ts`)
@@ -288,7 +274,7 @@ class BedrockAgentOrchestrator:
 
 **Why return control instead of Lambda?**:
 - Keeps backend execution in our application code — no separate Lambda functions to deploy and manage
-- Backends (Rovo MCP, Vertex AI Search) need credentials already loaded in the ECS task
+- Backends (Rovo MCP) need credentials already loaded in the ECS task
 - Simpler deployment — one container handles everything
 - Easier to test — mock the Bedrock Agent API, test backend execution directly
 
@@ -349,37 +335,6 @@ class RovoMCPBackend:
 - Handle MCP-specific errors (auth failures, rate limits, timeouts)
 - Access is scoped to what the API token owner can see — use a dedicated service account for broad access
 
-### Component 4: Vertex AI Search Backend
-
-**Purpose**: Searches the Sage Bionetworks Google Sites company website via Vertex AI Search.
-
-**Interface**:
-```python
-class VertexAISearchBackend:
-    """Google Sites search via Vertex AI Search."""
-
-    def __init__(
-        self,
-        project_id: str,
-        location: str,
-        data_store_id: str,
-        service_account_credentials: dict,
-    ):
-        ...
-
-    @property
-    def name(self) -> str:
-        return "Google Sites (Vertex AI Search)"
-
-    async def query(self, question: str) -> BackendResult:
-        """Search Google Sites content via Vertex AI Search."""
-        ...
-
-    async def health_check(self) -> bool:
-        ...
-```
-
-
 ### Component 5: Health Check
 
 **Purpose**: Exposes a lightweight HTTP health endpoint for ECS container health checks. Reports whether the Socket Mode connection is active and backends are reachable.
@@ -425,8 +380,7 @@ class HealthCheck:
   "status": "healthy",
   "websocket": "connected",
   "backends": {
-    "Atlassian Rovo": "ok",
-    "Google Sites (Vertex AI Search)": "ok"
+    "Atlassian Rovo": "ok"
   }
 }
 ```
@@ -628,14 +582,6 @@ ToolOutput(
     ],
     error_message=None,
 )
-
-# Example: failed Vertex AI Search result
-ToolOutput(
-    success=False,
-    content="",
-    sources=[],
-    error_message="Vertex AI Search returned 503: service unavailable",
-)
 ```
 
 **Serialization for Bedrock Agent**: The `ToolOutput` is serialized to a JSON string and sent in the `returnControlInvocationResults` field of the `InvokeAgent` request. The `responseBody` contains the JSON-encoded `content` and `sources` so the agent can cite them in its synthesized answer. On failure, the `responseBody` contains the error message so the agent can note the unavailable source.
@@ -646,11 +592,11 @@ ToolOutput(
 ```
 *Here's what I found:*
 
-PTO policy allows 20 days per year for full-time employees. Requests should be submitted through Workday at least 2 weeks in advance (Employee Handbook). The full policy details, including carryover rules and blackout periods, are documented in the PTO Policy page on Confluence.
+PTO policy allows 20 days per year for full-time employees. Requests should be submitted through Workday at least 2 weeks in advance. The full policy details, including carryover rules and blackout periods, are documented in the PTO Policy page on Confluence.
 
 *Sources:*
 1. <https://confluence.example.com/wiki/pto-policy|PTO Policy Page> (Confluence)
-2. <https://sites.google.com/sage.com/handbook/pto|Employee Handbook - PTO> (Google Sites)
+2. <https://confluence.example.com/wiki/employee-handbook|Employee Handbook> (Confluence)
 
 _Synthesized from 2 sources in 5.1s_
 ```
@@ -682,11 +628,6 @@ _Synthesized from 2 sources in 5.1s_
 **Condition**: User mentions the bot with no question text.
 **Response**: Ephemeral message: "Try asking me something like: `@bot What is our PTO policy?`"
 
-### Error Scenario 6: Vertex AI Search API Error
-**Condition**: Vertex AI Search returns an error.
-**Response**: Return results from other backends. Note: "Google Sites search is temporarily unavailable."
-**Recovery**: Log error. Alert on repeated failures.
-
 ### Error Scenario 7: Bedrock Agent Failure
 **Condition**: Bedrock Agent returns an error, times out, or gets throttled during the InvokeAgent call or return control loop.
 **Response**:
@@ -711,7 +652,6 @@ _Synthesized from 2 sources in 5.1s_
 - `SlackAgentApp`: Event parsing, empty question rejection, bot mention stripping
 - `BedrockAgentOrchestrator`: Return control loop, tool execution dispatch, response parsing, error handling
 - `RovoMCPBackend`: MCP response parsing, HTTP error handling
-- `VertexAISearchBackend`: Search result parsing, credential handling, API errors
 - Use `pytest` with `pytest-asyncio`, target 80%+ coverage
 
 ### Property-Based Tests (`hypothesis`)
@@ -719,7 +659,7 @@ _Synthesized from 2 sources in 5.1s_
 - Response formatting never exceeds Slack's 3000-character block limit
 
 ### Integration Tests
-- Backend integration against sandbox instances (Rovo MCP Server with test credentials, Vertex AI test data store)
+- Backend integration against sandbox instances (Rovo MCP Server with test credentials)
 - Slack message posting with a dedicated test channel
 - WebSocket reconnection behavior
 
@@ -745,12 +685,6 @@ async def main() -> None:
             api_token=secrets["atlassian_api_token"],
             cloud_id=secrets["atlassian_cloud_id"],
         ),
-        VertexAISearchBackend(
-            project_id=secrets["gcp_project_id"],
-            location="global",
-            data_store_id=secrets["vertex_data_store_id"],
-            service_account_credentials=secrets["gcp_service_account"],
-        ),
     ]
 
     # Initialize components
@@ -758,7 +692,6 @@ async def main() -> None:
         agent_id=secrets["bedrock_agent_id"],
         agent_alias_id=secrets["bedrock_agent_alias_id"],
         rovo_backend=backends[0],
-        vertex_backend=backends[1],
     )
     rate_limiter = RateLimiter()
     app = SlackAgentApp(
@@ -807,13 +740,12 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 
 ## Security Considerations
 
-- **Authorization model**: All Sage Bionetworks employees who can interact with the Slack bot have equal access to all content the service accounts can see. There is no per-user access filtering. The Rovo MCP backend uses a dedicated Atlassian service account, and the Vertex AI Search backend uses a GCP service account — whatever those accounts can access is available to every user of the bot. External collaborators must be blocked from using the bot. The Socket Mode App shall check the user's Slack User Group membership (e.g., `sage-all`) before processing any question — if the user is not in an authorized group, respond with an ephemeral message ("Sorry, this bot is only available to Sage staff") and skip processing. This check runs after event deduplication and before rate limiting. This is a deliberate MVP simplification; per-user content-level access control is out of scope.
+- **Authorization model**: All Sage Bionetworks employees who can interact with the Slack bot have equal access to all content the service accounts can see. There is no per-user access filtering. The Rovo MCP backend uses a dedicated Atlassian service account — whatever that account can access is available to every user of the bot. External collaborators must be blocked from using the bot. The Socket Mode App shall check the user's Slack User Group membership (e.g., `sage-all`) before processing any question — if the user is not in an authorized group, respond with an ephemeral message ("Sorry, this bot is only available to Sage staff") and skip processing. This check runs after event deduplication and before rate limiting. This is a deliberate MVP simplification; per-user content-level access control is out of scope.
 - **No public inbound HTTP endpoint**: Socket Mode uses an outbound WebSocket connection. Only an internal/container-local HTTP health check is exposed; no public URL is reachable from the internet.
 - **Secret management**: All tokens in AWS Secrets Manager. Never in env vars or code.
 - **Least privilege IAM**: ECS task role gets only `secretsmanager:GetSecretValue`, `bedrock:InvokeAgent`, and `logs:PutLogEvents`.
 - **Audit logging**: Structured JSON logs to CloudWatch include question text, backend results metadata, and latency. Logs retained for 90 days. No full backend response bodies logged. No secrets or credentials in logs.
 - **No persistent data store**: No database. Audit records live in CloudWatch Logs only. Questions and answers not stored beyond log retention.
-- **GCP service account scoping**: `discoveryengine.viewer` role only, scoped to the data store.
 - **Input sanitization**: Strip Slack formatting before sending to backends. Sanitize responses before posting.
 
 
@@ -825,8 +757,6 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 - `httpx` — Async HTTP client for MCP and API calls
 - `aiohttp` — Lightweight HTTP server for health check endpoint
 - `mcp` — Official MCP Python SDK (includes `ClientSession` for connecting to MCP servers as a client)
-- `google-cloud-discoveryengine` — Vertex AI Search client library
-- `google-auth` — GCP service account authentication
 - `pydantic` — Input validation and settings management
 - `boto3` — AWS SDK (Secrets Manager, Bedrock Runtime)
 
@@ -840,8 +770,6 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 ### External Services
 - Slack API — Socket Mode WebSocket, Web API for posting messages
 - Atlassian Rovo MCP Server (`mcp.atlassian.com`) — Search and summarize Confluence/Jira content via MCP protocol
-- Vertex AI Search API — Managed search over Google Sites content
-- Google Cloud Platform — Service account auth, Vertex AI Search hosting
 
 
 ## Correctness Properties
@@ -892,7 +820,7 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 
 ### Property 8: Action group to backend mapping correctness
 
-*For any* valid action group name returned by the Bedrock Agent, the orchestrator SHALL dispatch to the correct backend implementation: SearchConfluenceJira maps to Rovo_Backend and SearchGoogleSites maps to Vertex_Backend.
+*For any* valid action group name returned by the Bedrock Agent, the orchestrator SHALL dispatch to the correct backend implementation: SearchConfluenceJira maps to Rovo_Backend.
 
 **Validates: Requirement 5.7**
 
@@ -907,12 +835,6 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 *For any* valid MCP response from the Rovo MCP Server, the Rovo_Backend SHALL produce a BackendResult where success is True, answer contains the extracted text content, and source_urls contains all document links from the MCP response.
 
 **Validates: Requirement 7.2**
-
-### Property 11: Vertex AI Search response parsing completeness
-
-*For any* valid Vertex AI Search API response, the Vertex_Backend SHALL produce a BackendResult where success is True, answer contains the extracted text and AI summary, and source_urls contains all document links from the response.
-
-**Validates: Requirement 8.2**
 
 ### Property 12: Answer formatting includes all required components
 

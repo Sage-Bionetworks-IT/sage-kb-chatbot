@@ -2,14 +2,14 @@
 
 ## Overview
 
-Implement a Slack chatbot that receives questions via Socket Mode and uses an Amazon Bedrock Agent (return control pattern) to route queries to Rovo MCP and Vertex AI Search backends, synthesize answers, and post cited responses. The system runs as a single ECS Fargate service deployed via AWS CDK (Python).
+Implement a Slack chatbot that receives questions via Socket Mode and uses an Amazon Bedrock Agent (return control pattern) to route queries to the Rovo MCP backend, synthesize answers, and post cited responses. The system runs as a single ECS Fargate service deployed via AWS CDK (Python).
 
 ## Tasks
 
 - [x] 1. Set up project structure, data models, and shared utilities
   - [x] 1.1 Create project directory structure and configuration files
     - Create `src/slack_agent_router/` package with `__init__.py`
-    - Create `pyproject.toml` with dependencies: slack-bolt, slack-sdk, httpx, aiohttp, mcp, google-cloud-discoveryengine, google-auth, pydantic, boto3, hypothesis, pytest, pytest-asyncio
+    - Create `pyproject.toml` with dependencies: slack-bolt, slack-sdk, httpx, aiohttp, mcp, pydantic, boto3, hypothesis, pytest, pytest-asyncio
     - Create `Dockerfile` for the ECS Fargate container
     - _Requirements: 14.1_
 
@@ -106,28 +106,12 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run tests from 5.1 — all must pass
     - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-- [x] 6. Implement Vertex AI Search backend
-  - [x] 6.1 Write tests for VertexAISearchBackend (RED)
-    - **Property 11: Vertex AI Search response parsing completeness** — for any valid API response, the backend produces a BackendResult with success=True, answer text with AI summary, and all source URLs
-    - Unit tests: API error returns BackendResult with success=False, health_check returns boolean
-    - Tests should fail initially (no implementation yet)
-    - **Validates: Requirements 8.2, 8.3**
-
-  - [x] 6.2 Implement VertexAISearchBackend (GREEN)
-    - Create `src/slack_agent_router/backends/vertex.py`
-    - Query Vertex AI Search API with configured project, location, and data store
-    - Authenticate using GCP service account credentials from Secrets Manager
-    - Implement query() method that returns BackendResult with answer text, AI summary, and source URLs
-    - Implement health_check() method
-    - Handle API errors and return BackendResult with success=False
-    - Run tests from 6.1 — all must pass
-    - _Requirements: 8.1, 8.2, 8.3_
 
 - [x] 7. Implement Bedrock Agent orchestrator
   - [x] 7.1 Write tests for orchestrator (RED)
     - **Property 6: Return control loop iteration bound** — the orchestrator executes at most 5 iterations regardless of agent behavior
     - **Property 7: Return control loop duplicate tool call detection** — duplicate (action_group, parameters) pairs are skipped and cached results reused
-    - **Property 8: Action group to backend mapping correctness** — SearchConfluenceJira maps to Rovo_Backend, SearchGoogleSites maps to Vertex_Backend
+    - **Property 8: Action group to backend mapping correctness** — SearchConfluenceJira maps to Rovo_Backend
     - **Property 9: Session ID derivation from Slack thread context** — session_id follows "{channel_id}:{thread_ts}" or "{channel_id}:{message_ts}" format
     - Unit tests: agent failure before tool calls returns error message, agent failure after successful tool calls returns fallback with raw outputs, timeout enforcement
     - Tests should fail initially (no implementation yet)
@@ -136,7 +120,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
   - [x] 7.2 Implement BedrockAgentOrchestrator (GREEN)
     - Create `src/slack_agent_router/orchestrator.py`
     - Implement ask() method with the return control loop: invoke agent → receive tool requests → execute locally → send results back → repeat until final answer
-    - Map action group names to backends: SearchConfluenceJira → RovoMCPBackend, SearchGoogleSites → VertexAISearchBackend
+    - Map action group names to backends: SearchConfluenceJira → RovoMCPBackend
     - Enforce max 5 return control iterations
     - Enforce 30-second total timeout for ask()
     - Detect and skip duplicate tool calls (same action_group + parameters)
@@ -245,7 +229,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
   - [ ] 16.1 Write integration test for full question-to-answer flow
     - Test the complete pipeline: ParsedQuestion → orchestrator.ask() → formatted Slack response
     - Mock Bedrock Agent API responses (return control loop with tool requests and final answer)
-    - Mock backend HTTP calls (Rovo MCP, Vertex AI Search) with realistic response fixtures
+    - Mock backend HTTP calls (Rovo MCP) with realistic response fixtures
     - Verify progressive UX calls are made in correct order (reaction → placeholder → update → final)
     - _Requirements: 5.1, 5.2, 9.1, 4.1, 4.2, 4.3, 4.4, 4.5_
 
@@ -277,7 +261,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
 
   - [ ] 17.2 Configure IAM, secrets, and logging
     - Define least-privilege ECS task role: secretsmanager:GetSecretValue, bedrock:InvokeAgent, logs:PutLogEvents
-    - Define Secrets Manager secrets for Slack tokens, Atlassian API token, GCP service account credentials, Bedrock Agent IDs
+    - Define Secrets Manager secrets for Slack tokens, Atlassian API token, Bedrock Agent IDs
     - Define CloudWatch Log Group at /ecs/slack-agent-router with 90-day retention
     - _Requirements: 14.2, 14.3, 14.5_
 

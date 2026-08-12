@@ -2,8 +2,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Bedrock Agent for the Slack Agent Router.
-  Creates an agent with two RETURN_CONTROL action groups
-  (SearchConfluenceJira and SearchGoogleSites) and a live alias.
+  Creates an agent with a RETURN_CONTROL action group
+  (SearchConfluenceJira) and a live alias.
 
 Parameters:
   AgentName:
@@ -56,7 +56,7 @@ Resources:
                   - "arn:aws:bedrock:*::foundation-model/*"
 
   # -----------------------------------------------------------------
-  # Bedrock Agent with two RETURN_CONTROL action groups
+  # Bedrock Agent with SearchConfluenceJira RETURN_CONTROL action group
   # -----------------------------------------------------------------
   SlackAgentRouterAgent:
     Type: AWS::Bedrock::Agent
@@ -66,35 +66,24 @@ Resources:
       FoundationModel: !Ref FoundationModelId
       AutoPrepare: true
       Description: >
-        Routes Slack questions to knowledge backends (Confluence/Jira via
-        Rovo MCP and Google Sites via Vertex AI Search), synthesizes
-        answers with citations.
-      Instruction: >  #noqa
+        Routes Slack questions to the Confluence/Jira knowledge backend
+        via Rovo MCP, synthesizes answers with citations.
+      Instruction: >
         You are a helpful assistant for Sage Bionetworks employees.
-        When a user asks a question, decide which knowledge sources to
-        search based on the question content.
+        When a user asks a question, use SearchConfluenceJira to search
+        internal knowledge sources.
 
         Use SearchConfluenceJira for questions about internal processes,
         projects, policies, HR topics, IT procedures, or anything tracked
         in Confluence wiki pages or Jira issues.
 
-        Use SearchGoogleSites for questions about information published
-        on the company Google Sites website, such as the employee handbook,
-        team directories, or public-facing internal documentation.
-
-        You may call one or both tools depending on the question. If the
-        question could be answered by either source, search both.
-
-        After receiving results from the tools, synthesize a single
+        After receiving results from the tool, synthesize a single
         coherent answer. Always cite your sources by including the URLs
-        returned by each tool. Format citations as a numbered list at
+        returned by the tool. Format citations as a numbered list at
         the end of your answer.
 
-        If one source conflicts with another, note the discrepancy and
-        cite both sources so the user can verify.
-
-        If no relevant information is found from any source, say so
-        clearly. Do not make up or hallucinate answers.
+        If no relevant information is found, say so clearly. Do not
+        make up or hallucinate answers.
 
         Keep answers concise but complete. Use plain language appropriate
         for a workplace setting.
@@ -126,30 +115,6 @@ Resources:
                     Description: >
                       The search query to find relevant Confluence
                       pages and Jira issues.
-                    Required: true
-
-        # --- SearchGoogleSites (Vertex AI Search) ------------------
-        - ActionGroupName: SearchGoogleSites
-          ActionGroupState: ENABLED
-          Description: >
-            Search the company Google Sites website via Vertex AI Search
-            to find employee handbook content, team information, and
-            other internally published documentation.
-          ActionGroupExecutor:
-            CustomControl: RETURN_CONTROL
-          FunctionSchema:
-            Functions:
-              - Name: find_content
-                Description: >
-                  Search Google Sites content for information relevant
-                  to the user's question. Returns matching pages with
-                  AI-generated summaries and source URLs.
-                Parameters:
-                  query:
-                    Type: string
-                    Description: >
-                      The search query to find relevant Google Sites
-                      pages.
                     Required: true
 
   # -----------------------------------------------------------------

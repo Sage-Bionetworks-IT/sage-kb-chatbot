@@ -20,12 +20,9 @@ from slack_agent_router.main import (
     _BEDROCK_AGENT_ALIAS_ID_ENV,
     _BEDROCK_AGENT_ID_ENV,
     _CONFIG_FILE_ENV,
-    _GCP_PROJECT_ID_ENV,
     _REQUIRED_SECRET_KEYS,
     _ROVO_MCP_SERVER_URL_ENV,
     _SECRET_ID_ENV,
-    _VERTEX_DATA_STORE_ID_ENV,
-    _VERTEX_LOCATION_ENV,
     _validate_required_secret_keys,
     load_config,
     load_secrets,
@@ -39,9 +36,6 @@ _CONFIG_ENV_VARS = {
     _ATLASSIAN_SERVICE_USER_ENV: "test@example.com",
     _ROVO_MCP_SERVER_URL_ENV: "https://mcp.atlassian.com/v1/mcp",
     _ATLASSIAN_CLOUD_ID_ENV: "cloud-123",
-    _GCP_PROJECT_ID_ENV: "my-project",
-    _VERTEX_LOCATION_ENV: "global",
-    _VERTEX_DATA_STORE_ID_ENV: "ds-456",
     _BEDROCK_AGENT_ID_ENV: "agent-789",
     _BEDROCK_AGENT_ALIAS_ID_ENV: "alias-abc",
     _SECRET_ID_ENV: "test-secret-arn",
@@ -51,9 +45,6 @@ _CONFIG_FILE_VALUES = {
     "atlassian_service_user": "test@example.com",
     "rovo_mcp_server_url": "https://mcp.atlassian.com/v1/mcp",
     "atlassian_cloud_id": "cloud-123",
-    "gcp_project_id": "my-project",
-    "vertex_location": "global",
-    "vertex_data_store_id": "ds-456",
     "bedrock_agent_id": "agent-789",
     "bedrock_agent_alias_id": "alias-abc",
     "secret_id": "test-secret-arn",
@@ -66,7 +57,6 @@ def _make_secrets(**overrides: Any) -> dict[str, Any]:
         "slack_bot_token": "xoxb-test-token",
         "slack_app_token": "xapp-test-token",
         "atlassian_api_token": "atlassian-token",
-        "gcp_service_account": {"type": "service_account", "project_id": "my-project"},
     }
     base.update(overrides)
     return base
@@ -133,9 +123,6 @@ class TestLoadConfigEnvOnly:
         config = load_config()
         assert config.rovo_mcp_server_url == "https://mcp.atlassian.com/v1/mcp"
         assert config.atlassian_cloud_id == "cloud-123"
-        assert config.gcp_project_id == "my-project"
-        assert config.vertex_location == "global"
-        assert config.vertex_data_store_id == "ds-456"
         assert config.bedrock_agent_id == "agent-789"
         assert config.bedrock_agent_alias_id == "alias-abc"
 
@@ -144,9 +131,6 @@ class TestLoadConfigEnvOnly:
         [
             _ROVO_MCP_SERVER_URL_ENV,
             _ATLASSIAN_CLOUD_ID_ENV,
-            _GCP_PROJECT_ID_ENV,
-            _VERTEX_LOCATION_ENV,
-            _VERTEX_DATA_STORE_ID_ENV,
             _BEDROCK_AGENT_ID_ENV,
             _BEDROCK_AGENT_ALIAS_ID_ENV,
         ],
@@ -188,7 +172,6 @@ class TestLoadConfigJsonFile:
 
         config = load_config(config_path=str(config_file))
         assert config.bedrock_agent_id == "agent-789"
-        assert config.vertex_location == "global"
 
     def test_env_overrides_json_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _clear_config_env(monkeypatch)
@@ -234,9 +217,6 @@ class TestLoadConfigYamlFile:
             atlassian_service_user: test@example.com
             rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
             atlassian_cloud_id: cloud-yaml
-            gcp_project_id: my-project
-            vertex_location: global
-            vertex_data_store_id: ds-456
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
             secret_id: test-secret-arn
@@ -254,9 +234,6 @@ class TestLoadConfigYamlFile:
             atlassian_service_user: test@example.com
             rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
             atlassian_cloud_id: cloud-yml
-            gcp_project_id: my-project
-            vertex_location: global
-            vertex_data_store_id: ds-456
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
             secret_id: test-secret-arn
@@ -274,18 +251,15 @@ class TestLoadConfigYamlFile:
             atlassian_service_user: test@example.com
             rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
             atlassian_cloud_id: cloud-yaml
-            gcp_project_id: my-project
-            vertex_location: global
-            vertex_data_store_id: ds-456
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
             secret_id: test-secret-arn
         """)
         )
 
-        monkeypatch.setenv(_VERTEX_LOCATION_ENV, "us-central1")
+        monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "overridden-agent")
         config = load_config(config_path=str(config_file))
-        assert config.vertex_location == "us-central1"
+        assert config.bedrock_agent_id == "overridden-agent"
         assert config.atlassian_cloud_id == "cloud-yaml"
 
     def test_raises_on_invalid_yaml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -355,21 +329,18 @@ class TestLoadConfigFileResolution:
         partial = {
             "rovo_mcp_server_url": "https://mcp.atlassian.com/v1/mcp",
             "atlassian_cloud_id": "from-file",
-            "gcp_project_id": "from-file",
         }
         config_file = tmp_path / "partial.json"
         config_file.write_text(json.dumps(partial))
 
         monkeypatch.setenv(_ATLASSIAN_SERVICE_USER_ENV, "test@example.com")
-        monkeypatch.setenv(_VERTEX_LOCATION_ENV, "global")
-        monkeypatch.setenv(_VERTEX_DATA_STORE_ID_ENV, "ds-env")
         monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "agent-env")
         monkeypatch.setenv(_BEDROCK_AGENT_ALIAS_ID_ENV, "alias-env")
         monkeypatch.setenv(_SECRET_ID_ENV, "test-secret-arn")
 
         config = load_config(config_path=str(config_file))
         assert config.atlassian_cloud_id == "from-file"
-        assert config.vertex_data_store_id == "ds-env"
+        assert config.bedrock_agent_id == "agent-env"
 
 
 # ------------------------------------------------------------------
@@ -409,38 +380,9 @@ class TestLoadSecrets:
             with pytest.raises(RuntimeError, match="Missing required secret keys"):
                 await load_secrets(secret_id="incomplete-secret")
 
-    async def test_parses_gcp_service_account_string(self) -> None:
-        sa_dict = {"type": "service_account", "project_id": "my-project"}
-        secrets_dict = _make_secrets(gcp_service_account=json.dumps(sa_dict))
-        raw_json = json.dumps(secrets_dict)
-
-        with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
-            result = await load_secrets(secret_id="test-secret")
-
-        assert isinstance(result["gcp_service_account"], dict)
-        assert result["gcp_service_account"]["type"] == "service_account"
-
-    async def test_gcp_service_account_dict_passthrough(self) -> None:
-        sa_dict = {"type": "service_account", "project_id": "my-project"}
-        secrets_dict = _make_secrets(gcp_service_account=sa_dict)
-        raw_json = json.dumps(secrets_dict)
-
-        with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
-            result = await load_secrets(secret_id="test-secret")
-
-        assert result["gcp_service_account"] == sa_dict
-
-    async def test_raises_on_invalid_gcp_service_account_string(self) -> None:
-        secrets_dict = _make_secrets(gcp_service_account="not-valid-json")
-        raw_json = json.dumps(secrets_dict)
-
-        with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
-            with pytest.raises(RuntimeError, match="gcp_service_account is not valid JSON"):
-                await load_secrets(secret_id="test-secret")
-
     async def test_config_keys_not_required_in_secrets(self) -> None:
         secrets_dict = _make_secrets()
-        for key in ("atlassian_cloud_id", "gcp_project_id", "vertex_data_store_id", "bedrock_agent_id"):
+        for key in ("atlassian_cloud_id", "bedrock_agent_id"):
             assert key not in secrets_dict
 
         raw_json = json.dumps(secrets_dict)
@@ -475,7 +417,6 @@ class TestMain:
             patch("slack_agent_router.main._create_health_check", new_callable=AsyncMock, return_value=None),
             patch("slack_agent_router.main.asyncio.get_running_loop") as mock_loop,
             patch("slack_agent_router.backends.rovo.RovoMCPBackend") as mock_rovo_cls,
-            patch("slack_agent_router.backends.vertex.VertexAISearchBackend") as mock_vertex_cls,
             patch("slack_agent_router.orchestrator.BedrockAgentOrchestrator") as mock_orch_cls,
             patch("slack_agent_router.rate_limiter.RateLimiter") as mock_rl_cls,
             patch("slack_agent_router.slack_app.SlackAgentApp", return_value=mock_app_instance),
@@ -498,12 +439,6 @@ class TestMain:
             assert rovo_call.kwargs["mcp_server_url"] == "https://mcp.atlassian.com/v1/mcp"
             assert rovo_call.kwargs["api_token"] == "atlassian-token"
             assert rovo_call.kwargs["cloud_id"] == "cloud-123"
-
-            mock_vertex_cls.assert_called_once()
-            vertex_call = mock_vertex_cls.call_args
-            assert vertex_call.kwargs["project_id"] == "my-project"
-            assert vertex_call.kwargs["location"] == "global"
-            assert vertex_call.kwargs["data_store_id"] == "ds-456"
 
             mock_orch_cls.assert_called_once()
             orch_call = mock_orch_cls.call_args

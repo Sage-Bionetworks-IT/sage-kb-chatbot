@@ -2,14 +2,13 @@
 
 ## Introduction
 
-The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives questions via Slack and uses an Amazon Bedrock Agent to route them to external knowledge sources (Atlassian Confluence/Jira via Rovo MCP Server and Google Sites via Vertex AI Search), synthesize results, and return cited answers. The system uses Slack Socket Mode for secure, endpoint-free event reception and runs as a single ECS Fargate service.
+The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives questions via Slack and uses an Amazon Bedrock Agent to route them to the Atlassian Confluence/Jira knowledge base via Rovo MCP Server, synthesize results, and return cited answers. The system uses Slack Socket Mode for secure, endpoint-free event reception and runs as a single ECS Fargate service.
 
 ## Glossary
 
 - **Socket_Mode_App**: The Slack Bolt application that maintains a WebSocket connection to Slack, receives events, and dispatches questions for processing.
 - **Bedrock_Orchestrator**: The component that interacts with the Amazon Bedrock Agent using the return control pattern to route questions, execute tool calls, and obtain synthesized answers.
 - **Rovo_Backend**: The backend that queries Atlassian's Rovo MCP Server to search and summarize Confluence and Jira content.
-- **Vertex_Backend**: The backend that queries Google Vertex AI Search to search the company Google Sites website.
 - **Health_Check_Server**: A lightweight HTTP server that exposes a health endpoint for ECS container health checks.
 - **Rate_Limiter**: An in-memory component that enforces per-user and global rate limits using sliding window counters.
 - **Audit_Logger**: The structured logging component that emits JSON logs for operational visibility and audit trail.
@@ -81,7 +80,7 @@ The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives
 4. THE Bedrock_Orchestrator SHALL enforce a 30-second total timeout for the entire ask() call.
 5. WHEN the same action group and parameters are requested again within the same Return_Control_Loop, THE Bedrock_Orchestrator SHALL skip the duplicate tool call.
 6. WHEN any guardrail (max iterations, timeout, duplicate detection) is triggered, THE Bedrock_Orchestrator SHALL return the best partial answer available or a "couldn't complete" message.
-7. THE Bedrock_Orchestrator SHALL map action group names to the correct backend implementations (Rovo_Backend for SearchConfluenceJira, Vertex_Backend for SearchGoogleSites).
+7. THE Bedrock_Orchestrator SHALL map action group names to the correct backend implementations (Rovo_Backend for SearchConfluenceJira).
 
 ### Requirement 6: Session Management
 
@@ -103,16 +102,6 @@ The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives
 2. WHEN the Rovo MCP Server returns results, THE Rovo_Backend SHALL parse the MCP response and return a BackendResult with answer text and source URLs.
 3. IF the Rovo MCP Server returns an authentication error, THEN THE Rovo_Backend SHALL return a BackendResult with success=False and a descriptive error message.
 4. IF the Rovo MCP Server times out or returns an HTTP error, THEN THE Rovo_Backend SHALL return a BackendResult with success=False and a descriptive error message.
-
-### Requirement 8: Vertex AI Search Backend
-
-**User Story:** As a Sage Bionetworks employee, I want the bot to search the company Google Sites website, so that I can find answers from our public-facing internal documentation.
-
-#### Acceptance Criteria
-
-1. WHEN the Bedrock Agent requests a SearchGoogleSites tool call, THE Vertex_Backend SHALL query the Vertex AI Search API with the configured project, location, and data store.
-2. WHEN Vertex AI Search returns results, THE Vertex_Backend SHALL parse the response and return a BackendResult with answer text, AI summary, and source URLs.
-3. IF Vertex AI Search returns an API error, THEN THE Vertex_Backend SHALL return a BackendResult with success=False and a descriptive error message.
 
 ### Requirement 9: Answer Formatting
 
@@ -181,7 +170,7 @@ The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives
 2. THE CDK stack SHALL configure the ECS task role with least-privilege IAM permissions: secretsmanager:GetSecretValue, bedrock:InvokeAgent, and logs:PutLogEvents.
 3. THE CDK stack SHALL define a CloudWatch Log Group at /ecs/slack-agent-router with 90-day retention.
 4. THE CDK stack SHALL configure the ECS container health check to use the /health endpoint on port 8080.
-5. THE CDK stack SHALL store all secrets (Slack tokens, Atlassian API token, GCP service account credentials, Bedrock Agent IDs) in AWS Secrets Manager.
+5. THE CDK stack SHALL store all secrets (Slack tokens, Atlassian API token, Bedrock Agent IDs) in AWS Secrets Manager.
 
 ### Requirement 15: Input Validation and Sanitization
 
