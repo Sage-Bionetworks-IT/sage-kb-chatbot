@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from mcp.types import CallToolResult
 
 from slack_agent_router.backends.rovo import RovoMCPBackend
 from slack_agent_router.models import BackendResult
@@ -602,3 +603,149 @@ class TestBuildToolArgs:
         """Double quotes in the question are escaped for JQL."""
         args = backend._build_tool_args("searchJiraIssuesUsingJql", 'find "bug" issues')
         assert '\\"bug\\"' in args["jql"]
+
+
+# -------------------------------------------------------
+# _resolve_available_tools helper
+# -------------------------------------------------------
+
+
+class TestResolveAvailableTools:
+    """Tests for _resolve_available_tools — returns all matching search tools."""
+
+    def test_returns_both_preferred_tools_when_available(self):
+        """When both Confluence and Jira tools exist, both are returned."""
+        tools_response = MagicMock()
+        tool_confluence = MagicMock()
+        tool_confluence.name = "searchConfluenceUsingCql"
+        tool_jira = MagicMock()
+        tool_jira.name = "searchJiraIssuesUsingJql"
+        tools_response.tools = [tool_confluence, tool_jira]
+
+        result = RovoMCPBackend._resolve_available_tools(tools_response)
+        assert result == ["searchConfluenceUsingCql", "searchJiraIssuesUsingJql"]
+
+    def test_returns_only_confluence_when_jira_missing(self):
+        """When only Confluence tool exists, only it is returned."""
+        tools_response = MagicMock()
+        tool_confluence = MagicMock()
+        tool_confluence.name = "searchConfluenceUsingCql"
+        tools_response.tools = [tool_confluence]
+
+        result = RovoMCPBackend._resolve_available_tools(tools_response)
+        assert result == ["searchConfluenceUsingCql"]
+
+    def test_returns_only_jira_when_confluence_missing(self):
+        """When only Jira tool exists, only it is returned."""
+        tools_response = MagicMock()
+        tool_jira = MagicMock()
+        tool_jira.name = "searchJiraIssuesUsingJql"
+        tools_response.tools = [tool_jira]
+
+        result = RovoMCPBackend._resolve_available_tools(tools_response)
+        assert result == ["searchJiraIssuesUsingJql"]
+
+    def test_falls_back_to_search_named_tools(self):
+        """When no preferred tools exist, falls back to tools with 'search' in name."""
+        tools_response = MagicMock()
+        tool_custom = MagicMock()
+        tool_custom.name = "customSearchTool"
+        tool_other = MagicMock()
+        tool_other.name = "list_pages"
+        tools_response.tools = [tool_custom, tool_other]
+
+        result = RovoMCPBackend._resolve_available_tools(tools_response)
+        assert result == ["customSearchTool"]
+
+    def test_falls_back_to_first_tool_when_no_search(self):
+        """When no search tools exist, falls back to the first available tool."""
+        tools_response = MagicMock()
+        tool = MagicMock()
+        tool.name = "list_pages"
+        tools_response.tools = [tool]
+
+        result = RovoMCPBackend._resolve_available_tools(tools_response)
+        assert result == ["list_pages"]
+
+    def test_empty_tools_returns_default(self):
+        """When tools list is empty, returns the first preferred tool as default."""
+        tools_response = MagicMock()
+        tools_response.tools = []
+
+        result = RovoMCPBackend._resolve_available_tools(tools_response)
+        assert result == ["searchConfluenceUsingCql"]
+
+
+# -------------------------------------------------------
+# _merge_tool_results helper
+# -------------------------------------------------------
+
+
+class TestMergeToolResults:
+    """Tests for _merge_tool_results — merging multiple CallToolResults."""
+
+    def test_merges_two_successful_results(self):
+        """Content from both successful results is combined."""
+        from mcp.types import TextContent
+
+        content_a = TextContent(type="text", text="Confluence result")
+        content_b = TextContent(type="text", text="Jira result")
+
+        result_a = CallToolResult(content=[content_a], isError=False)
+        result_b = CallToolResult(content=[content_b], isError=False)
+
+        merged = RovoMCPBackend._merge_tool_results([result_a, result_b])
+
+        assert merged.isError is False
+        assert len(merged.content) == 2
+        assert content_a in merged.content
+        assert content_b in merged.content
+
+    def test_merges_one_success_one_error(self):
+        """When one succeeds and one fails, only successful content is returned."""
+        from mcp.types import TextContent
+
+        content_ok = TextContent(type="text", text="Good result")
+        content_err = TextContent(type="text", text="Error details")
+
+        result_ok = CallToolResult(content=[content_ok], isError=False)
+        result_err = CallToolResult(content=[content_err], isError=True)
+
+        merged = RovoMCPBackend._merge_tool_results([result_ok, result_err])
+
+        assert merged.isError is False
+        assert len(merged.content) == 1
+        assert content_ok in merged.content
+
+    def test_all_errors_returns_first_error(self):
+        """When all results are errors, returns the first error result."""
+        from mcp.types import TextContent
+
+        content_a = TextContent(type="text", text="Auth failed")
+        content_b = TextContent(type="text", text="Timeout")
+
+        result_a = CallToolResult(content=[content_a], isError=True)
+        result_b = CallToolResult(content=[content_b], isError=True)
+
+        merged = RovoMCPBackend._merge_tool_results([result_a, result_b])
+
+        assert merged.isError is True
+        assert merged is result_a
+
+    def test_single_result_returned_as_is(self):
+        """A single result is returned unchanged."""
+        from mcp.types import TextContent
+
+        content = TextContent(type="text", text="Only result")
+        result = CallToolResult(content=[content], isError=False)
+
+        merged = RovoMCPBackend._merge_tool_results([result])
+
+        assert merged is result
+
+    def test_empty_list_returns_error(self):
+        """An empty results list returns an error CallToolResult."""
+        merged = RovoMCPBackend._merge_tool_results([])
+
+        assert merged.isError is True
+        assert isinstance(merged, CallToolResult)

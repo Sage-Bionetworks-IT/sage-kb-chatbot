@@ -499,13 +499,25 @@ class TestAgentFailureAfterToolCalls:
 
 
 class TestTimeoutEnforcement:
-    """Orchestrator enforces 30-second total timeout."""
+    """Orchestrator enforces total timeout."""
+
+    @pytest.fixture()
+    def orchestrator(self, rovo_backend):
+        """Orchestrator with a very short timeout for fast tests."""
+        from slack_agent_router.orchestrator import BedrockAgentOrchestrator
+
+        return BedrockAgentOrchestrator(
+            agent_id="test-agent-id",
+            agent_alias_id="test-alias-id",
+            rovo_backend=rovo_backend,
+            timeout_seconds=0.1,  # 100ms instead of 30s
+        )
 
     async def test_timeout_returns_response(self, orchestrator):
         """ask() returns a response even when timeout is hit."""
 
         async def _invoke_side_effect(*args, **kwargs):
-            await asyncio.sleep(60)  # Way longer than 30s timeout
+            await asyncio.sleep(60)  # Way longer than timeout
 
         with patch.object(orchestrator, "_invoke_agent", side_effect=_invoke_side_effect):
             result = await orchestrator.ask("What is PTO?", "C123:1234567890.123456")
