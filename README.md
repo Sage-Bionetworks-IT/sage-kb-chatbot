@@ -21,127 +21,58 @@ Key components:
 - **RateLimiter** — Per-user rate limiting
 - **AuditLogger** — Structured logging of all interactions
 
-## Prerequisites
+## Usage
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) (package manager)
-- AWS credentials with access to Bedrock and Secrets Manager
-- A configured Amazon Bedrock Agent (see [sage-kb-chatbot-infra])
-- A Slack app with Socket Mode enabled
+There are three ways to interact with the bot in Slack:
 
-## Setup
+### @mention in a channel
 
-```bash
-# Clone and enter the project
-cd sage-kb-chatbot
-
-# Install dependencies
-uv sync --extra dev
-
-# Copy and fill in configuration
-cp config.yaml.example config.yaml
-```
-
-## Configuration
-
-Configuration is loaded from a YAML/JSON file with environment variable overrides. Env vars always take precedence
-over file values.
-
-| Config key               | Environment variable           | Description                     |
-|--------------------------|--------------------------------|---------------------------------|
-| `rovo_mcp_server_url`    | `ROVO_MCP_SERVER_URL`          | Atlassian Rovo MCP endpoint     |
-| `atlassian_cloud_id`     | `ATLASSIAN_CLOUD_ID`           | Atlassian Cloud instance ID     |
-| `atlassian_service_user` | `ATLASSIAN_SERVICE_USER`       | Atlassian service account email |
-| `bedrock_agent_id`       | `BEDROCK_AGENT_ID`             | Amazon Bedrock Agent ID         |
-| `bedrock_agent_alias_id` | `BEDROCK_AGENT_ALIAS_ID`       | Amazon Bedrock Agent Alias ID   |
-| `secret_id`              | `SLACK_AGENT_ROUTER_SECRET_ID` | Secrets Manager secret name/ARN |
-
-The config file path is resolved in order:
-1. `SLACK_AGENT_ROUTER_CONFIG` environment variable
-2. `config.yaml` or `config.json` in the working directory
-
-### Secrets (AWS Secrets Manager)
-
-Sensitive credentials are stored in AWS Secrets Manager as a JSON object:
-
-```json
-{
-  "slack_bot_token": "xoxb-...",
-  "slack_app_token": "xapp-...",
-  "atlassian_api_token": "..."
-}
-```
-
-## Running locally
-
-```bash
-# With config.yaml in place and AWS credentials configured:
-uv run python -m slack_agent_router.main
-```
-
-The app starts a Socket Mode connection to Slack and a health check server on port 8080.
-
-## Docker
-
-```bash
-docker build -t sage-kb-chatbot .
-docker run -p 8080:8080 \
-  -e BEDROCK_AGENT_ID=... \
-  -e BEDROCK_AGENT_ALIAS_ID=... \
-  -e ROVO_MCP_SERVER_URL=https://mcp.atlassian.com/v1/mcp \
-  -e ATLASSIAN_CLOUD_ID=... \
-  -e ATLASSIAN_SERVICE_USER=... \
-  -e SLACK_AGENT_ROUTER_SECRET_ID=... \
-  sage-kb-chatbot
-```
-
-## Testing
-
-```bash
-# Run all tests
-uv run pytest
-
-# With coverage
-uv run pytest --cov
-
-# Run a specific test file
-uv run pytest tests/test_rovo_backend.py -v
-```
-
-Tests use [Hypothesis](https://hypothesis.readthedocs.io/) for property-based testing alongside standard pytest
-unit tests.
-
-## Linting
-
-```bash
-uv run ruff check .
-uv run ruff format .
-```
-
-## Infrastructure
-
-The Bedrock Agent and supporting AWS resources are defined as CDK stacks in [sage-kb-chatbot-infra]. After
-deploying, the `AgentId` and `AgentAliasId` outputs should be set in your config.
-
-## Project structure
+Mention the bot in any channel it's been invited to:
 
 ```
-src/slack_agent_router/
-├── main.py            # Entrypoint — config, secrets, wiring, startup
-├── slack_app.py       # Slack Socket Mode listener
-├── orchestrator.py    # Bedrock Agent conversation loop
-├── backends/
-│   └── rovo.py        # Atlassian Rovo MCP client
-├── rate_limiter.py    # Per-user rate limiting
-├── sanitize.py        # Input sanitization
-├── formatter.py       # Response formatting for Slack
-├── audit_logger.py    # Structured audit logging
-└── models.py          # Shared data models
-tests/
-├── test_orchestrator.py
-├── test_rovo_backend.py
-└── ...
+@sage-kb-chatbot What is our PTO policy?
 ```
+
+The bot replies in a thread attached to your message.
+
+### Direct message
+
+Send a DM to the bot — no @mention needed:
+
+```
+How do I request access to the VPN?
+```
+
+### Slash command
+
+Use the `/sage-ask` slash command from any channel:
+
+```
+/sage-ask Where can I find the onboarding checklist?
+```
+
+The response is posted in the channel where you ran the command.
+
+### What it searches
+
+The bot searches Confluence wiki pages and Jira issues via Atlassian Rovo. It works best for questions about:
+
+- Internal processes and policies (PTO, expense reports, onboarding)
+- Project documentation and status
+- IT procedures and access requests
+- HR topics and benefits
+- Anything tracked in Confluence or Jira
+
+### Tips
+
+- Ask specific questions — "What is the travel reimbursement policy?" works better than "travel"
+- The bot cites its sources with links at the end of each answer
+- If the bot can't find relevant information, it will tell you rather than guessing
+- Answers from older sources are flagged so you know to verify them
+
+## Development
+
+For setup, configuration, testing, deployment, and external service setup, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
