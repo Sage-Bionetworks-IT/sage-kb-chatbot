@@ -188,17 +188,52 @@ The app starts a Socket Mode connection to Slack and a health check server on po
 
 ## Docker
 
+The app is packaged as a Docker image using a multi-stage build with [uv](https://docs.astral.sh/uv/) for fast,
+reproducible installs.
+
+### Build the image
+
 ```bash
 docker build -t sage-kb-chatbot .
+```
+
+### Run the container
+
+The container needs AWS credentials and configuration passed via environment variables. Secrets are fetched from AWS
+Secrets Manager at startup, so the container needs network access to AWS APIs.
+
+```bash
 docker run -p 8080:8080 \
-  -e BEDROCK_AGENT_ID=... \
-  -e BEDROCK_AGENT_ALIAS_ID=... \
+  -e BEDROCK_AGENT_ID=your-agent-id \
+  -e BEDROCK_AGENT_ALIAS_ID=your-alias-id \
   -e ROVO_MCP_SERVER_URL=https://mcp.atlassian.com/v1/mcp \
-  -e ATLASSIAN_CLOUD_ID=... \
-  -e ATLASSIAN_SERVICE_USER=... \
-  -e SLACK_AGENT_ROUTER_SECRET_ID=... \
+  -e ATLASSIAN_CLOUD_ID=your-cloud-id \
+  -e ATLASSIAN_SERVICE_USER=your-service-account@example.com \
+  -e SLACK_AGENT_ROUTER_SECRET_ID=infra/slack-agent-router \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_ACCESS_KEY_ID=... \
+  -e AWS_SECRET_ACCESS_KEY=... \
   sage-kb-chatbot
 ```
+
+When running on ECS/Fargate, AWS credentials come from the task role — no need to pass `AWS_ACCESS_KEY_ID` or
+`AWS_SECRET_ACCESS_KEY`.
+
+### Health check
+
+The container exposes a health check endpoint at `http://localhost:8080/health`. Docker's built-in `HEALTHCHECK`
+instruction is configured in the Dockerfile:
+
+- Interval: 30s
+- Timeout: 5s
+- Start period: 10s (gives the app time to connect to Slack)
+- Retries: 3
+
+### Logging
+
+The app writes structured JSON logs to stdout. On ECS Fargate, these are automatically captured by the `awslogs`
+driver and shipped to CloudWatch. Set the `LOG_LEVEL` environment variable to control verbosity
+(`DEBUG`, `INFO`, `WARNING`, `ERROR`). Defaults to `INFO`.
 
 ## Infrastructure
 
