@@ -24,6 +24,14 @@ Parameters:
     Default: live
     Description: Name of the agent alias used by the application.
 
+  SearchConfluenceJiraState:
+    Type: String
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+    Description: Enable or disable the SearchConfluenceJira action group.
+
 Resources:
   # -----------------------------------------------------------------
   # IAM role that the Bedrock Agent assumes
@@ -95,7 +103,7 @@ Resources:
       ActionGroups:
         # --- SearchConfluenceJira (Rovo MCP) -----------------------
         - ActionGroupName: SearchConfluenceJira
-          ActionGroupState: ENABLED
+          ActionGroupState: !Ref SearchConfluenceJiraState
           Description: >
             Search Confluence wiki pages and Jira issues via Atlassian
             Rovo to find internal documentation, policies, project
