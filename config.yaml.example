@@ -7,4 +7,4 @@ atlassian_cloud_id: your-cloud-id
 atlassian_service_user: your-atlassian-service-account
 bedrock_agent_id: your-agent-id
 bedrock_agent_alias_id: your-alias-id
-secret_id: slack-agent-router/dev
+slack_agent_router_secret_id: slack-agent-router/dev

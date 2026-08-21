@@ -47,7 +47,7 @@ _ENV_MAP: dict[str, str] = {
     "atlassian_cloud_id": _ATLASSIAN_CLOUD_ID_ENV,
     "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
     "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
-    "secret_id": _SECRET_ID_ENV,
+    "slack_agent_router_secret_id": _SECRET_ID_ENV,
 }
 
 
@@ -60,7 +60,7 @@ class AppConfig:
     atlassian_cloud_id: str
     bedrock_agent_id: str
     bedrock_agent_alias_id: str
-    secret_id: str
+    slack_agent_router_secret_id: str
 
 
 def load_config(config_path: str | None = None) -> AppConfig:
@@ -210,8 +210,8 @@ async def load_secrets(secret_id: str) -> dict[str, Any]:
     * ``atlassian_api_token``  — Atlassian API token for Rovo MCP
 
     Args:
-        secret_id: Secrets Manager secret name or ARN. Typically
-            comes from ``AppConfig.secret_id``.
+        slack_agent_router_secret_id: Secrets Manager secret name or ARN. Typically
+            comes from ``AppConfig.slack_agent_router_secret_id``.
 
     Returns:
         Parsed secret as a dictionary.
@@ -313,7 +313,7 @@ async def main() -> None:
     logger.info("Starting Slack Agent Router")
 
     config = load_config()
-    secrets = await load_secrets(config.secret_id)
+    secrets = await load_secrets(config.slack_agent_router_secret_id)
 
     # --- Backends ---------------------------------------------------
     from slack_agent_router.backends.rovo import RovoMCPBackend

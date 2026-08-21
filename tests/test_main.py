@@ -47,7 +47,7 @@ _CONFIG_FILE_VALUES = {
     "atlassian_cloud_id": "cloud-123",
     "bedrock_agent_id": "agent-789",
     "bedrock_agent_alias_id": "alias-abc",
-    "secret_id": "test-secret-arn",
+    "slack_agent_router_secret_id": "test-secret-arn",
 }
 
 
@@ -219,7 +219,7 @@ class TestLoadConfigYamlFile:
             atlassian_cloud_id: cloud-yaml
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
-            secret_id: test-secret-arn
+            slack_agent_router_secret_id: test-secret-arn
         """)
         )
 
@@ -236,7 +236,7 @@ class TestLoadConfigYamlFile:
             atlassian_cloud_id: cloud-yml
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
-            secret_id: test-secret-arn
+            slack_agent_router_secret_id: test-secret-arn
         """)
         )
 
@@ -253,7 +253,7 @@ class TestLoadConfigYamlFile:
             atlassian_cloud_id: cloud-yaml
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
-            secret_id: test-secret-arn
+            slack_agent_router_secret_id: test-secret-arn
         """)
         )
 
