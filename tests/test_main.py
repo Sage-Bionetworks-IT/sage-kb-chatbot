@@ -22,7 +22,7 @@ from slack_agent_router.main import (
     _CONFIG_FILE_ENV,
     _REQUIRED_SECRET_KEYS,
     _ROVO_MCP_SERVER_URL_ENV,
-    _SECRET_ID_ENV,
+    _SLACK_AGENT_ROUTER_SECRET_ID_ENV,
     _validate_required_secret_keys,
     load_config,
     load_secrets,
@@ -38,7 +38,7 @@ _CONFIG_ENV_VARS = {
     _ATLASSIAN_CLOUD_ID_ENV: "cloud-123",
     _BEDROCK_AGENT_ID_ENV: "agent-789",
     _BEDROCK_AGENT_ALIAS_ID_ENV: "alias-abc",
-    _SECRET_ID_ENV: "test-secret-arn",
+    _SLACK_AGENT_ROUTER_SECRET_ID_ENV: "test-secret-arn",
 }
 
 _CONFIG_FILE_VALUES = {
@@ -336,7 +336,7 @@ class TestLoadConfigFileResolution:
         monkeypatch.setenv(_ATLASSIAN_SERVICE_USER_ENV, "test@example.com")
         monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "agent-env")
         monkeypatch.setenv(_BEDROCK_AGENT_ALIAS_ID_ENV, "alias-env")
-        monkeypatch.setenv(_SECRET_ID_ENV, "test-secret-arn")
+        monkeypatch.setenv(_SLACK_AGENT_ROUTER_SECRET_ID_ENV, "test-secret-arn")
 
         config = load_config(config_path=str(config_file))
         assert config.atlassian_cloud_id == "from-file"
@@ -402,7 +402,7 @@ class TestMain:
 
     async def test_main_wires_components_and_starts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_config_env(monkeypatch)
-        monkeypatch.setenv(_SECRET_ID_ENV, "test-secret-arn")
+        monkeypatch.setenv(_SLACK_AGENT_ROUTER_SECRET_ID_ENV, "test-secret-arn")
 
         secrets_dict = _make_secrets()
         raw_json = json.dumps(secrets_dict)

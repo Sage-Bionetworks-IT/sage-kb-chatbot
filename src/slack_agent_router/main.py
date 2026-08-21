@@ -38,7 +38,7 @@ _ROVO_MCP_SERVER_URL_ENV = "ROVO_MCP_SERVER_URL"
 _ATLASSIAN_CLOUD_ID_ENV = "ATLASSIAN_CLOUD_ID"
 _BEDROCK_AGENT_ID_ENV = "BEDROCK_AGENT_ID"
 _BEDROCK_AGENT_ALIAS_ID_ENV = "BEDROCK_AGENT_ALIAS_ID"
-_SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"
+_SLACK_AGENT_ROUTER_SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"
 
 # Maps AppConfig field name → environment variable name.
 _ENV_MAP: dict[str, str] = {
@@ -47,7 +47,7 @@ _ENV_MAP: dict[str, str] = {
     "atlassian_cloud_id": _ATLASSIAN_CLOUD_ID_ENV,
     "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
     "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
-    "slack_agent_router_secret_id": _SECRET_ID_ENV,
+    "slack_agent_router_secret_id": _SLACK_AGENT_ROUTER_SECRET_ID_ENV,
 }
 
 
