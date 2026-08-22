@@ -356,7 +356,7 @@ class TestLoadSecrets:
         raw_json = json.dumps(secrets_dict)
 
         with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
-            result = await load_secrets(secret_id="test-secret")
+            result = await load_secrets(slack_agent_router_secret_id="test-secret")
 
         assert result["slack_bot_token"] == "xoxb-test-token"
         assert result["atlassian_api_token"] == "atlassian-token"
@@ -364,12 +364,12 @@ class TestLoadSecrets:
     async def test_raises_on_secrets_manager_error(self) -> None:
         with patch("slack_agent_router.main._get_secret_value", side_effect=Exception("AWS error")):
             with pytest.raises(RuntimeError, match="Failed to load secrets"):
-                await load_secrets(secret_id="bad-secret")
+                await load_secrets(slack_agent_router_secret_id="bad-secret")
 
     async def test_raises_on_invalid_json(self) -> None:
         with patch("slack_agent_router.main._get_secret_value", return_value="not-json"):
             with pytest.raises(RuntimeError, match="not valid JSON"):
-                await load_secrets(secret_id="bad-json-secret")
+                await load_secrets(slack_agent_router_secret_id="bad-json-secret")
 
     async def test_raises_on_missing_required_key(self) -> None:
         incomplete = _make_secrets()
@@ -378,7 +378,7 @@ class TestLoadSecrets:
 
         with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
             with pytest.raises(RuntimeError, match="Missing required secret keys"):
-                await load_secrets(secret_id="incomplete-secret")
+                await load_secrets(slack_agent_router_secret_id="incomplete-secret")
 
     async def test_config_keys_not_required_in_secrets(self) -> None:
         secrets_dict = _make_secrets()
@@ -387,7 +387,7 @@ class TestLoadSecrets:
 
         raw_json = json.dumps(secrets_dict)
         with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
-            result = await load_secrets(secret_id="test-secret")
+            result = await load_secrets(slack_agent_router_secret_id="test-secret")
 
         assert "atlassian_cloud_id" not in result
 

@@ -200,7 +200,7 @@ def _parse_yaml(text: str, path: str) -> dict[str, Any]:
 # ------------------------------------------------------------------
 
 
-async def load_secrets(secret_id: str) -> dict[str, Any]:
+async def load_secrets(slack_agent_router_secret_id: str) -> dict[str, Any]:
     """Load sensitive credentials from AWS Secrets Manager.
 
     The secret is expected to be a JSON object with the following keys:
@@ -221,7 +221,7 @@ async def load_secrets(secret_id: str) -> dict[str, Any]:
     """
 
     try:
-        raw = await asyncio.to_thread(_get_secret_value, secret_id)
+        raw = await asyncio.to_thread(_get_secret_value, slack_agent_router_secret_id)
     except Exception as exc:
         raise RuntimeError(f"Failed to load secrets from Secrets Manager: {exc}") from exc
 
