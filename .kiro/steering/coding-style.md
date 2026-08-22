@@ -6,8 +6,9 @@ inclusion: always
 
 ## Line Length
 
-- Use a maximum line length of 120 characters for all generated code
-- This applies to Python source files, test files, and configuration files
+- Use a maximum line length of 120 characters for all generated content
+- This applies to Python source files, test files, configuration files, and markdown/documentation files
+- For markdown prose, fill lines up to 120 characters before wrapping to the next line
 
 ## Immutability
 
