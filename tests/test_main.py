@@ -22,7 +22,7 @@ from slack_agent_router.main import (
     _CONFIG_FILE_ENV,
     _REQUIRED_SECRET_KEYS,
     _ROVO_MCP_SERVER_URL_ENV,
-    _SECRET_ID_ENV,
+    _SLACK_AGENT_ROUTER_SECRET_ID_ENV,
     _validate_required_secret_keys,
     load_config,
     load_secrets,
@@ -38,7 +38,7 @@ _CONFIG_ENV_VARS = {
     _ATLASSIAN_CLOUD_ID_ENV: "cloud-123",
     _BEDROCK_AGENT_ID_ENV: "agent-789",
     _BEDROCK_AGENT_ALIAS_ID_ENV: "alias-abc",
-    _SECRET_ID_ENV: "test-secret-arn",
+    _SLACK_AGENT_ROUTER_SECRET_ID_ENV: "test-secret-arn",
 }
 
 _CONFIG_FILE_VALUES = {
@@ -47,7 +47,7 @@ _CONFIG_FILE_VALUES = {
     "atlassian_cloud_id": "cloud-123",
     "bedrock_agent_id": "agent-789",
     "bedrock_agent_alias_id": "alias-abc",
-    "secret_id": "test-secret-arn",
+    "slack_agent_router_secret_id": "test-secret-arn",
 }
 
 
@@ -219,7 +219,7 @@ class TestLoadConfigYamlFile:
             atlassian_cloud_id: cloud-yaml
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
-            secret_id: test-secret-arn
+            slack_agent_router_secret_id: test-secret-arn
         """)
         )
 
@@ -236,7 +236,7 @@ class TestLoadConfigYamlFile:
             atlassian_cloud_id: cloud-yml
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
-            secret_id: test-secret-arn
+            slack_agent_router_secret_id: test-secret-arn
         """)
         )
 
@@ -253,7 +253,7 @@ class TestLoadConfigYamlFile:
             atlassian_cloud_id: cloud-yaml
             bedrock_agent_id: agent-789
             bedrock_agent_alias_id: alias-abc
-            secret_id: test-secret-arn
+            slack_agent_router_secret_id: test-secret-arn
         """)
         )
 
@@ -336,7 +336,7 @@ class TestLoadConfigFileResolution:
         monkeypatch.setenv(_ATLASSIAN_SERVICE_USER_ENV, "test@example.com")
         monkeypatch.setenv(_BEDROCK_AGENT_ID_ENV, "agent-env")
         monkeypatch.setenv(_BEDROCK_AGENT_ALIAS_ID_ENV, "alias-env")
-        monkeypatch.setenv(_SECRET_ID_ENV, "test-secret-arn")
+        monkeypatch.setenv(_SLACK_AGENT_ROUTER_SECRET_ID_ENV, "test-secret-arn")
 
         config = load_config(config_path=str(config_file))
         assert config.atlassian_cloud_id == "from-file"
@@ -356,7 +356,7 @@ class TestLoadSecrets:
         raw_json = json.dumps(secrets_dict)
 
         with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
-            result = await load_secrets(secret_id="test-secret")
+            result = await load_secrets(slack_agent_router_secret_id="test-secret")
 
         assert result["slack_bot_token"] == "xoxb-test-token"
         assert result["atlassian_api_token"] == "atlassian-token"
@@ -364,12 +364,12 @@ class TestLoadSecrets:
     async def test_raises_on_secrets_manager_error(self) -> None:
         with patch("slack_agent_router.main._get_secret_value", side_effect=Exception("AWS error")):
             with pytest.raises(RuntimeError, match="Failed to load secrets"):
-                await load_secrets(secret_id="bad-secret")
+                await load_secrets(slack_agent_router_secret_id="bad-secret")
 
     async def test_raises_on_invalid_json(self) -> None:
         with patch("slack_agent_router.main._get_secret_value", return_value="not-json"):
             with pytest.raises(RuntimeError, match="not valid JSON"):
-                await load_secrets(secret_id="bad-json-secret")
+                await load_secrets(slack_agent_router_secret_id="bad-json-secret")
 
     async def test_raises_on_missing_required_key(self) -> None:
         incomplete = _make_secrets()
@@ -378,7 +378,7 @@ class TestLoadSecrets:
 
         with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
             with pytest.raises(RuntimeError, match="Missing required secret keys"):
-                await load_secrets(secret_id="incomplete-secret")
+                await load_secrets(slack_agent_router_secret_id="incomplete-secret")
 
     async def test_config_keys_not_required_in_secrets(self) -> None:
         secrets_dict = _make_secrets()
@@ -387,7 +387,7 @@ class TestLoadSecrets:
 
         raw_json = json.dumps(secrets_dict)
         with patch("slack_agent_router.main._get_secret_value", return_value=raw_json):
-            result = await load_secrets(secret_id="test-secret")
+            result = await load_secrets(slack_agent_router_secret_id="test-secret")
 
         assert "atlassian_cloud_id" not in result
 
@@ -402,7 +402,7 @@ class TestMain:
 
     async def test_main_wires_components_and_starts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_config_env(monkeypatch)
-        monkeypatch.setenv(_SECRET_ID_ENV, "test-secret-arn")
+        monkeypatch.setenv(_SLACK_AGENT_ROUTER_SECRET_ID_ENV, "test-secret-arn")
 
         secrets_dict = _make_secrets()
         raw_json = json.dumps(secrets_dict)

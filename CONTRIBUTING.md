@@ -148,14 +148,14 @@ refactor(component): code restructuring
 Configuration is loaded from a YAML/JSON file with environment variable overrides. Env vars always take precedence
 over file values.
 
-| Config key               | Environment variable           | Description                     |
-|--------------------------|--------------------------------|---------------------------------|
-| `rovo_mcp_server_url`    | `ROVO_MCP_SERVER_URL`          | Atlassian Rovo MCP endpoint     |
-| `atlassian_cloud_id`     | `ATLASSIAN_CLOUD_ID`           | Atlassian Cloud instance ID     |
-| `atlassian_service_user` | `ATLASSIAN_SERVICE_USER`       | Atlassian service account email |
-| `bedrock_agent_id`       | `BEDROCK_AGENT_ID`             | Amazon Bedrock Agent ID         |
-| `bedrock_agent_alias_id` | `BEDROCK_AGENT_ALIAS_ID`       | Amazon Bedrock Agent Alias ID   |
-| `secret_id`              | `SLACK_AGENT_ROUTER_SECRET_ID` | Secrets Manager secret name/ARN |
+| Config key                       | Environment variable           | Description                     |
+|----------------------------------|--------------------------------|---------------------------------|
+| `rovo_mcp_server_url`            | `ROVO_MCP_SERVER_URL`          | Atlassian Rovo MCP endpoint     |
+| `atlassian_cloud_id`             | `ATLASSIAN_CLOUD_ID`           | Atlassian Cloud instance ID     |
+| `atlassian_service_user`         | `ATLASSIAN_SERVICE_USER`       | Atlassian service account email |
+| `bedrock_agent_id`               | `BEDROCK_AGENT_ID`             | Amazon Bedrock Agent ID         |
+| `bedrock_agent_alias_id`         | `BEDROCK_AGENT_ALIAS_ID`       | Amazon Bedrock Agent Alias ID   |
+| `slack_agent_router_secret_id`   | `SLACK_AGENT_ROUTER_SECRET_ID` | Secrets Manager secret name/ARN |
 
 The config file path is resolved in order:
 1. `SLACK_AGENT_ROUTER_CONFIG` environment variable
