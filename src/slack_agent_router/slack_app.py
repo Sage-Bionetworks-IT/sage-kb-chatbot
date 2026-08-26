@@ -247,12 +247,21 @@ class SlackAgentApp:
         Prefers Slack's ``event_id``/``client_msg_id`` when present, and
         falls back to a ``channel:event_ts`` composite so redelivered
         events without an ID are still caught.
+
+        Returns an empty string when neither a native ID nor a reliable
+        composite can be formed—callers (and the deduplicator) treat
+        empty strings as "not dedupable" and allow the event through.
         """
-        return (
-            event.get("event_id")
-            or event.get("client_msg_id")
-            or f"{event.get('channel', '')}:{event.get('event_ts', event.get('ts', ''))}"
-        )
+        if event.get("event_id"):
+            return event["event_id"]
+        if event.get("client_msg_id"):
+            return event["client_msg_id"]
+
+        channel = event.get("channel", "")
+        ts = event.get("event_ts") or event.get("ts") or ""
+        if channel and ts:
+            return f"{channel}:{ts}"
+        return ""
 
     async def _dispatch_and_format(self, parsed: ParsedQuestion) -> str:
         """Call the orchestrator and return a formatted Slack mrkdwn string.
