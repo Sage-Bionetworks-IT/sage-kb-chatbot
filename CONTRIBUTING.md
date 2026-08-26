@@ -130,6 +130,37 @@ Store all credentials as Secrets Manager secrets (referenced by the ECS task at 
 
 The ECS task role needs `secretsmanager:GetSecretValue` permission for these secrets.
 
+## Event Processing Pipeline
+
+Each incoming Slack event passes through the following stages before the bot responds:
+
+```
+Event received → Deduplication → Authorization → Rate Limiting → Orchestration → Response
+```
+
+### Event Deduplication
+
+Slack may redeliver events when the WebSocket reconnects or if acknowledgement is slow. The bot uses an in-memory TTL cache to silently skip duplicate events.
+
+**How it works:**
+
+1. For `app_mention` and DM events, the bot derives a dedup key from (in priority order):
+   - `event_id` (preferred — Slack's unique event identifier)
+   - `client_msg_id` (fallback — client-assigned message ID)
+   - `channel:event_ts` composite (last resort — for events with neither ID)
+2. For `/sage-ask` slash commands, the bot deduplicates on `trigger_id`
+3. If the key was seen within the last 60 seconds, the event is skipped silently
+4. Otherwise, the key is recorded and processing continues
+
+**Characteristics:**
+
+- State is in-memory only — resets on container restart (acceptable for single-task ECS)
+- 60-second TTL window covers Slack's typical retry behavior
+- Periodic cleanup evicts expired entries to bound memory growth
+- Empty or unreliable keys (missing channel or timestamp) bypass dedup entirely — the event is always processed
+
+**Ordering:** Deduplication runs before authorization and rate limiting (per Requirement 2.3), so duplicate events never count against rate limits or trigger unnecessary Slack API calls.
+
 ## Commit Messages
 
 Use [conventional commits](https://www.conventionalcommits.org/):
@@ -247,6 +278,7 @@ src/slack_agent_router/
 ├── main.py            # Entrypoint — config, secrets, wiring, startup
 ├── slack_app.py       # Slack Socket Mode listener
 ├── orchestrator.py    # Bedrock Agent conversation loop
+├── dedup.py           # Event deduplication (TTL cache)
 ├── backends/
 │   └── rovo.py        # Atlassian Rovo MCP client
 ├── rate_limiter.py    # Per-user rate limiting
