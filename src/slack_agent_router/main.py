@@ -39,6 +39,7 @@ _ATLASSIAN_CLOUD_ID_ENV = "ATLASSIAN_CLOUD_ID"
 _BEDROCK_AGENT_ID_ENV = "BEDROCK_AGENT_ID"
 _BEDROCK_AGENT_ALIAS_ID_ENV = "BEDROCK_AGENT_ALIAS_ID"
 _SLACK_AGENT_ROUTER_SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"  # pragma: allowlist secret
+_SLACK_AUTHORIZED_USERGROUP_ENV = "SLACK_AUTHORIZED_USERGROUP"
 
 # Maps AppConfig field name → environment variable name.
 _ENV_MAP: dict[str, str] = {
@@ -48,6 +49,12 @@ _ENV_MAP: dict[str, str] = {
     "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
     "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
     "slack_agent_router_secret_id": _SLACK_AGENT_ROUTER_SECRET_ID_ENV,
+    "slack_authorized_usergroup": _SLACK_AUTHORIZED_USERGROUP_ENV,
+}
+
+# Fields that have defaults and are not required in config/env.
+_OPTIONAL_FIELDS: dict[str, str] = {
+    "slack_authorized_usergroup": "sage-all",
 }
 
 
@@ -61,6 +68,7 @@ class AppConfig:
     bedrock_agent_id: str
     bedrock_agent_alias_id: str
     slack_agent_router_secret_id: str
+    slack_authorized_usergroup: str = "sage-all"
 
 
 def load_config(config_path: str | None = None) -> AppConfig:
@@ -85,6 +93,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
     * ``BEDROCK_AGENT_ID``       — Amazon Bedrock Agent ID
     * ``BEDROCK_AGENT_ALIAS_ID`` — Amazon Bedrock Agent alias ID
     * ``SLACK_AGENT_ROUTER_SECRET_ID`` — Secrets Manager secret name or ARN
+    * ``SLACK_AUTHORIZED_USERGROUP``   — Slack User Group handle for authorization (default: sage-all)
 
     Raises:
         RuntimeError: If any required config value is missing after
@@ -103,9 +112,16 @@ def load_config(config_path: str | None = None) -> AppConfig:
         elif field_name in file_values and file_values[field_name]:
             values[field_name] = str(file_values[field_name]).strip()
 
+    # --- Apply defaults for optional fields -------------------------
+    for field_name, default in _OPTIONAL_FIELDS.items():
+        if not values.get(field_name):
+            values[field_name] = default
+
     # --- Validate all required fields are present -------------------
     missing: list[str] = []
     for field_name, env_var in _ENV_MAP.items():
+        if field_name in _OPTIONAL_FIELDS:
+            continue
         if not values.get(field_name):
             missing.append(env_var)
 
@@ -346,6 +362,17 @@ async def main() -> None:
 
     deduplicator = EventDeduplicator()
 
+    # --- Authorization (User Group membership) ----------------------
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    from slack_agent_router.auth import UserGroupAuthorizer
+
+    slack_web_client = AsyncWebClient(token=secrets["slack_bot_token"])
+    authorizer = UserGroupAuthorizer(
+        slack_client=slack_web_client,
+        usergroup_handle=config.slack_authorized_usergroup,
+    )
+
     # --- Slack app ---------------------------------------------------
     from slack_agent_router.slack_app import SlackAgentApp
 
@@ -354,6 +381,7 @@ async def main() -> None:
         app_token=secrets["slack_app_token"],
         orchestrator=orchestrator,
         rate_limiter=rate_limiter,
+        auth_check=authorizer.is_authorized,
         deduplicator=deduplicator,
     )
 

@@ -18,6 +18,7 @@ Key components:
 - **SlackAgentApp** — Slack Socket Mode listener, handles messages and mentions
 - **BedrockAgentOrchestrator** — Manages the Bedrock Agent conversation loop with timeout and iteration guards
 - **RovoMCPBackend** — Calls Atlassian Rovo MCP to search Confluence pages and Jira issues
+- **UserGroupAuthorizer** — Checks Slack User Group membership (sage-all) with a cached member list
 - **RateLimiter** — Per-user rate limiting
 - **AuditLogger** — Structured logging of all interactions
 
@@ -52,6 +53,10 @@ Use the `/sage-ask` slash command from any channel:
 ```
 
 The response is posted in the channel where you ran the command.
+
+### Who can use it
+
+The bot is restricted to members of the **sage-all** Slack User Group. If you're not in that group, the bot will respond with an ephemeral message saying it's only available to Sage staff. Contact your workspace admin to be added to the group.
 
 ### What it searches
 
