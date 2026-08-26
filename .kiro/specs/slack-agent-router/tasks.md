@@ -178,7 +178,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
   - Verify answers are posted as thread replies with citations
 
 - [ ] 12. Implement event deduplication, authorization, and progressive UX
-  - [ ] 12.1 Implement event deduplication (GREEN)
+  - [x] 12.1 Implement event deduplication (GREEN)
     - Add in-memory TTL cache (60-second window) for event_id/envelope_id deduplication
     - Deduplicate slash commands on trigger_id
     - Skip processing silently for duplicate events

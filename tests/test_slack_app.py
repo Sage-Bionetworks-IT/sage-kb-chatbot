@@ -23,6 +23,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from slack_agent_router.dedup import EventDeduplicator
 from slack_agent_router.models import AgentResponse
 from slack_agent_router.rate_limiter import RateLimiter
 from slack_agent_router.slack_app import (
@@ -62,6 +63,7 @@ def _make_app(
     orchestrator=None,
     rate_limiter=None,
     auth_check=None,
+    deduplicator=None,
 ) -> SlackAgentApp:
     """Build a SlackAgentApp with sensible mock defaults."""
     return SlackAgentApp(
@@ -70,6 +72,7 @@ def _make_app(
         orchestrator=orchestrator or AsyncMock(),
         rate_limiter=rate_limiter or MagicMock(spec=RateLimiter),
         auth_check=auth_check or AsyncMock(return_value=True),
+        deduplicator=deduplicator,
     )
 
 
@@ -823,3 +826,187 @@ class TestAgentFailureFallback:
         posted_text = say.call_args.kwargs["text"]
         # The fallback text should be included in the formatted output
         assert "I had trouble synthesizing" in posted_text
+
+
+# -------------------------------------------------------
+# Unit tests: Event deduplication (task 12.1)
+# -------------------------------------------------------
+
+
+def _mention_event() -> dict[str, Any]:
+    """A representative app_mention event with a stable event_id."""
+    return {
+        "type": "app_mention",
+        "event_id": "Ev123ABC",
+        "user": "U12345",
+        "text": "<@UBOTID> What is PTO?",
+        "channel": "C99999",
+        "ts": "1234567890.123456",
+        "team": "T00001",
+        "event_ts": "1234567890.123456",
+    }
+
+
+class TestEventDeduplication:
+    """Requirements 1.5, 1.6: duplicate events/commands are skipped silently."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_event_skipped_silently(self, mock_auth_check) -> None:
+        """The same event delivered twice only reaches the orchestrator once."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(
+            return_value=AgentResponse(answer="PTO is 20 days.", source_urls=[], tool_calls_made=["t"], latency_ms=10.0)
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(
+            orchestrator=orch,
+            rate_limiter=limiter,
+            auth_check=mock_auth_check,
+            deduplicator=EventDeduplicator(),
+        )
+        event = _mention_event()
+        say = AsyncMock()
+        client = AsyncMock()
+
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+
+        # Only the first delivery is processed.
+        orch.ask.assert_called_once()
+        say.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_runs_before_auth_and_rate_limit(self, mock_auth_check) -> None:
+        """A duplicate is dropped before auth and rate-limit checks run."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(
+            return_value=AgentResponse(answer="A", source_urls=[], tool_calls_made=["t"], latency_ms=10.0)
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        auth_check = AsyncMock(return_value=True)
+        app = _make_app(
+            orchestrator=orch,
+            rate_limiter=limiter,
+            auth_check=auth_check,
+            deduplicator=EventDeduplicator(),
+        )
+        event = _mention_event()
+        say = AsyncMock()
+        client = AsyncMock()
+
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+        # Reset call counts; the second (duplicate) delivery must not
+        # invoke auth or the rate limiter at all.
+        auth_check.reset_mock()
+        limiter.check.reset_mock()
+
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+
+        auth_check.assert_not_called()
+        limiter.check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_distinct_events_both_processed(self, mock_auth_check) -> None:
+        """Two different events are both processed."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(
+            return_value=AgentResponse(answer="A", source_urls=[], tool_calls_made=["t"], latency_ms=10.0)
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(
+            orchestrator=orch,
+            rate_limiter=limiter,
+            auth_check=mock_auth_check,
+            deduplicator=EventDeduplicator(),
+        )
+        first = _mention_event()
+        second = dict(first, event_id="Ev999ZZZ", event_ts="1234567891.000000", ts="1234567891.000000")
+        say = AsyncMock()
+        client = AsyncMock()
+
+        await app.handle_event(first, say=say, client=client, bot_user_id="UBOTID")
+        await app.handle_event(second, say=say, client=client, bot_user_id="UBOTID")
+
+        assert orch.ask.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_event_dedup_falls_back_to_channel_ts(self, mock_auth_check) -> None:
+        """Events without an event_id dedupe on the channel:event_ts composite."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(
+            return_value=AgentResponse(answer="A", source_urls=[], tool_calls_made=["t"], latency_ms=10.0)
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(
+            orchestrator=orch,
+            rate_limiter=limiter,
+            auth_check=mock_auth_check,
+            deduplicator=EventDeduplicator(),
+        )
+        event = _mention_event()
+        del event["event_id"]
+        say = AsyncMock()
+        client = AsyncMock()
+
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+
+        orch.ask.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_deduplicator_processes_all(self, mock_auth_check) -> None:
+        """With no deduplicator configured, duplicates are still processed."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(
+            return_value=AgentResponse(answer="A", source_urls=[], tool_calls_made=["t"], latency_ms=10.0)
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check, deduplicator=None)
+        event = _mention_event()
+        say = AsyncMock()
+        client = AsyncMock()
+
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+        await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
+
+        assert orch.ask.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_duplicate_slash_command_skipped_after_ack(self, mock_auth_check) -> None:
+        """A retried slash command (same trigger_id) is acked but processed once."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(
+            return_value=AgentResponse(answer="A", source_urls=[], tool_calls_made=["t"], latency_ms=10.0)
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(
+            orchestrator=orch,
+            rate_limiter=limiter,
+            auth_check=mock_auth_check,
+            deduplicator=EventDeduplicator(),
+        )
+        command = {
+            "command": "/sage-ask",
+            "text": "What is PTO?",
+            "user_id": "U12345",
+            "channel_id": "C99999",
+            "team_id": "T00001",
+            "trigger_id": "trigger_abc123",
+        }
+        ack = AsyncMock()
+        say = AsyncMock()
+        client = AsyncMock()
+
+        await app._handle_slash_command(ack, command, say, client)
+        await app._handle_slash_command(ack, command, say, client)
+
+        # Both deliveries are acknowledged, but only one is processed.
+        assert ack.call_count == 2
+        orch.ask.assert_called_once()
+        say.assert_called_once()

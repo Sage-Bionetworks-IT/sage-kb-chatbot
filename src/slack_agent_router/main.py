@@ -341,6 +341,11 @@ async def main() -> None:
 
     rate_limiter = RateLimiter()
 
+    # --- Event deduplicator -----------------------------------------
+    from slack_agent_router.dedup import EventDeduplicator
+
+    deduplicator = EventDeduplicator()
+
     # --- Slack app ---------------------------------------------------
     from slack_agent_router.slack_app import SlackAgentApp
 
@@ -349,6 +354,7 @@ async def main() -> None:
         app_token=secrets["slack_app_token"],
         orchestrator=orchestrator,
         rate_limiter=rate_limiter,
+        deduplicator=deduplicator,
     )
 
     # --- Health check ------------------------------------------------
