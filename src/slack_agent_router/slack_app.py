@@ -205,7 +205,11 @@ class SlackAgentApp:
                 )
                 return
 
-        # Rate limit check
+        # Rate limit check + acquire. Acquire immediately after a successful
+        # check, before any awaits, so the in-flight counter is incremented
+        # synchronously. Awaiting between check() and acquire() would let
+        # concurrent requests all pass check() before any of them increment
+        # in_flight, bypassing the per-user in-flight guard under load.
         if self._rate_limiter is not None:
             allowed, reason = self._rate_limiter.check(parsed.user_id)
             if not allowed:
@@ -215,19 +219,16 @@ class SlackAgentApp:
                     text=reason,
                 )
                 return
-
-        # Progressive UX: acknowledge receipt with a reaction + placeholder.
-        await self._add_reaction(client, parsed.channel_id, reaction_ts, _REACTION_WORKING)
-        placeholder_ts = await self._post_placeholder(client, parsed.channel_id, thread_ts)
-
-        # Progress callback updates the placeholder as each backend is searched.
-        on_progress = self._make_progress_callback(client, parsed.channel_id, placeholder_ts)
-
-        # Acquire rate limiter slot (tracks in-flight + sliding windows)
-        if self._rate_limiter is not None:
             self._rate_limiter.acquire(parsed.user_id)
 
         try:
+            # Progressive UX: acknowledge receipt with a reaction + placeholder.
+            await self._add_reaction(client, parsed.channel_id, reaction_ts, _REACTION_WORKING)
+            placeholder_ts = await self._post_placeholder(client, parsed.channel_id, thread_ts)
+
+            # Progress callback updates the placeholder as each backend is searched.
+            on_progress = self._make_progress_callback(client, parsed.channel_id, placeholder_ts)
+
             response = await self._dispatch_and_format(parsed, on_progress=on_progress)
         finally:
             if self._rate_limiter is not None:
