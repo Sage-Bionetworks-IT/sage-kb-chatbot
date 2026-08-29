@@ -5,6 +5,11 @@
 rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
 atlassian_cloud_id: your-cloud-id
 atlassian_service_user: your-atlassian-service-account
-bedrock_agent_id: your-agent-id
-bedrock_agent_alias_id: your-alias-id
 slack_agent_router_secret_id: slack-agent-router/dev
+
+######### Optional configs #########
+
+# bedrock_agent_id / bedrock_agent_alias_id come from the deployed BedrockAgentStack.
+# In ECS they are injected by CDK. For local runs, export them as environment variables:
+#   export BEDROCK_AGENT_ID=your-agent-id
+#   export BEDROCK_AGENT_ALIAS_ID=your-alias-id
