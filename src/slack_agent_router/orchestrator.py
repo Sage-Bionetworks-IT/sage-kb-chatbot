@@ -317,6 +317,8 @@ class BedrockAgentOrchestrator:
             return
         try:
             await on_progress(action_group)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             logger.warning("Progress callback failed for %s: %s", action_group, exc)
 

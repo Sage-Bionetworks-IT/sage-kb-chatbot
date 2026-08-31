@@ -436,6 +436,8 @@ class SlackAgentApp:
                 lambda: client.reactions_add(channel=channel_id, timestamp=timestamp, name=name)
             )
         except Exception as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             logger.warning("Failed to add reaction '%s': %s", name, exc)
 
     async def _remove_reaction(
@@ -453,6 +455,8 @@ class SlackAgentApp:
                 lambda: client.reactions_remove(channel=channel_id, timestamp=timestamp, name=name)
             )
         except Exception as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             logger.warning("Failed to remove reaction '%s': %s", name, exc)
 
     async def _post_placeholder(
@@ -473,6 +477,8 @@ class SlackAgentApp:
                 kwargs["thread_ts"] = thread_ts
             response = await self._slack_call_with_retry(lambda: client.chat_postMessage(**kwargs))
         except Exception as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             logger.warning("Failed to post placeholder message: %s", exc)
             return None
         # response behaves like a dict (SlackResponse supports __getitem__).
@@ -527,6 +533,8 @@ class SlackAgentApp:
                 )
                 return
             except Exception as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 logger.warning("Failed to update placeholder with answer — posting fresh: %s", exc)
 
         await self._post_with_retry(say, text=text, thread_ts=thread_ts)

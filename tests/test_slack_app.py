@@ -100,11 +100,16 @@ def _delivered_text(say: AsyncMock, client: AsyncMock) -> str:
     The answer is delivered by updating the placeholder (``chat_update``)
     when one exists, or by ``say`` as a fallback. This helper returns the
     text regardless of which path was taken.
+
+    We check ``say`` first because when ``chat_update`` raises and the
+    code falls back to ``say()``, ``chat_update.call_args`` is still set
+    from the failed attempt.  Preferring ``say`` ensures we return the
+    text that was *actually* delivered.
     """
-    if client.chat_update.call_args is not None:
-        return client.chat_update.call_args.kwargs["text"]
     if say.call_args is not None:
         return say.call_args.kwargs["text"]
+    if client.chat_update.call_args is not None:
+        return client.chat_update.call_args.kwargs["text"]
     raise AssertionError("No answer was delivered via chat_update or say")
 
 
