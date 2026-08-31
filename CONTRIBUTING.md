@@ -200,6 +200,27 @@ Slack may redeliver events when the WebSocket reconnects or if acknowledgement i
 
 **Ordering:** Deduplication runs before authorization and rate limiting (per Requirement 2.3), so duplicate events never count against rate limits or trigger unnecessary Slack API calls.
 
+### Progressive UX Feedback
+
+While a question is being answered, the bot surfaces live progress so the user knows it's working (Requirement 4). This spans `SlackAgentApp._process_question` and the orchestrator's `on_progress` callback.
+
+**How it works:**
+
+1. On receipt, the bot adds a 👀 (`eyes`) reaction to the user's message via `reactions.add`.
+2. It posts a **⏳ Thinking...** placeholder reply with `chat.postMessage` and keeps the returned `ts`.
+3. `SlackAgentApp` builds an `on_progress` callback and passes it to `BedrockAgentOrchestrator.ask`. As each backend tool call begins, the orchestrator invokes the callback with the action group name, and the bot updates the placeholder in place with a per-backend message (`chat.update`) — e.g. `SearchConfluenceJira` maps to **⏳ Searching Confluence and Jira...**, with a generic **⏳ Searching...** fallback for unmapped action groups.
+4. When the answer is ready, the placeholder is updated in place to the final answer (`chat.update`).
+5. The 👀 reaction is removed and a ✅ (`white_check_mark`) reaction is added.
+
+**Characteristics:**
+
+- **Best-effort** — every reaction, placeholder, and update call is wrapped so failures are logged and swallowed; progress reporting never aborts answer delivery. The orchestrator likewise swallows `on_progress` errors (re-raising only `CancelledError`).
+- **Graceful fallback** — if the placeholder can't be posted (or its later update fails), the bot posts the answer as a fresh threaded reply via `say`.
+- **Cached calls are quiet** — the orchestrator fires `on_progress` only for real backend calls, not for tool calls served from its dedup cache, so the placeholder doesn't flicker on repeated calls.
+- **Slash commands** — reactions are skipped (no user message to react to), but the thinking placeholder is still shown; `on_progress` is only wired up when a placeholder exists.
+- **Retries** — all of these Slack calls go through the shared `_slack_call_with_retry` helper, which retries on 429 with exponential backoff honoring `Retry-After`.
+- Action-group-to-message mapping lives in `_ACTION_GROUP_PROGRESS` in `slack_app.py`; add an entry there when introducing a new backend action group.
+
 ## Commit Messages
 
 Use [conventional commits](https://www.conventionalcommits.org/):
