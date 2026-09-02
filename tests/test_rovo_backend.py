@@ -604,6 +604,26 @@ class TestBuildToolArgs:
         args = backend._build_tool_args("searchJiraIssuesUsingJql", 'find "bug" issues')
         assert '\\"bug\\"' in args["jql"]
 
+    def test_jira_key_lookup(self, backend):
+        """A referenced issue key produces an exact key lookup OR'd with text."""
+        args = backend._build_tool_args("searchJiraIssuesUsingJql", "what is IT-5205 about?")
+        assert args["jql"] == 'key in (IT-5205) OR text ~ "what is IT-5205 about?"'
+
+    def test_jira_multiple_keys(self, backend):
+        """Multiple keys are all included, deduplicated, in order."""
+        args = backend._build_tool_args("searchJiraIssuesUsingJql", "compare IT-5205 and IT-42 and IT-5205 again")
+        assert args["jql"].startswith("key in (IT-5205, IT-42) OR text ~ ")
+
+    def test_jira_no_key_is_text_only(self, backend):
+        """A question with no key stays a plain text search."""
+        args = backend._build_tool_args("searchJiraIssuesUsingJql", "sprint planning")
+        assert args["jql"] == 'text ~ "sprint planning"'
+
+    def test_jira_lowercase_key_normalized(self, backend):
+        """A lowercase key is detected and normalized to uppercase."""
+        args = backend._build_tool_args("searchJiraIssuesUsingJql", "what is it-5205 about?")
+        assert args["jql"] == 'key in (IT-5205) OR text ~ "what is it-5205 about?"'
+
 
 # -------------------------------------------------------
 # _resolve_available_tools helper
