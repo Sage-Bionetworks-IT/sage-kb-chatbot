@@ -180,9 +180,16 @@ enabled.
 
 ```bash
 cp config.yaml.example config.yaml
-# Fill in config values, then:
+# Fill in config values. The Bedrock agent/alias IDs are NOT stored in config —
+# export them (from the deployed BedrockAgentStack outputs) before running:
+export BEDROCK_AGENT_ID=your-agent-id
+export BEDROCK_AGENT_ALIAS_ID=your-alias-id
 uv run python -m slack_agent_router.main
 ```
+
+The agent/alias IDs are kept out of `config.yaml` so the app is a pure invoker with a single source of truth (the
+`BedrockAgentStack`). In the ECS deployment these are injected automatically by CDK — see
+[Infrastructure](#infrastructure).
 
 The app starts a Socket Mode connection to Slack and a health check server on port 8080.
 
@@ -237,8 +244,14 @@ driver and shipped to CloudWatch. Set the `LOG_LEVEL` environment variable to co
 
 ## Infrastructure
 
-The Bedrock Agent and supporting AWS resources are defined as CDK stacks in [sage-kb-chatbot-infra]. After deploying,
-the `AgentId` and `AgentAliasId` outputs should be set in your config.
+The Bedrock Agent and supporting AWS resources are defined as CDK stacks in [sage-kb-chatbot-infra]. The
+`BedrockAgentStack` creates the agent and alias, and the CDK app injects their IDs into the ECS task's
+`BEDROCK_AGENT_ID` / `BEDROCK_AGENT_ALIAS_ID` environment variables as stack references, resolved at deploy time.
+
+This means the deployed app is a pure invoker: you do **not** copy the agent/alias IDs into config by hand for the
+ECS deployment — CDK wires them in automatically, and CloudFormation guarantees the agent exists before the app
+stack deploys. The `bedrock_agent_id` / `bedrock_agent_alias_id` values in `config.yaml` are only for running the
+app locally (see [Running locally](#running-locally)).
 
 ## Project structure
 
