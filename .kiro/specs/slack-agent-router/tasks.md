@@ -177,7 +177,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
   - Test app_mention, DM, and /sage-ask slash command inputs
   - Verify answers are posted as thread replies with citations
 
-- [ ] 12. Implement event deduplication, authorization, and progressive UX
+- [x] 12. Implement event deduplication, authorization, and progressive UX
   - [x] 12.1 Implement event deduplication (GREEN)
     - Add in-memory TTL cache (60-second window) for event_id/envelope_id deduplication
     - Deduplicate slash commands on trigger_id
@@ -190,7 +190,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run authorization after deduplication and before rate limiting
     - _Requirements: 2.1, 2.2, 2.3_
 
-  - [ ] 12.3 Implement progressive UX feedback (GREEN)
+  - [x] 12.3 Implement progressive UX feedback (GREEN)
     - Add 👀 reaction immediately on question receipt
     - Post "⏳ Thinking..." placeholder message in thread
     - Update placeholder as each backend is searched (e.g., "⏳ Searching Confluence and Jira...")

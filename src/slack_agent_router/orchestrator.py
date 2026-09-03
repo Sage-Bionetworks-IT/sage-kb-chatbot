@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from slack_agent_router.models import (
@@ -19,6 +20,10 @@ from slack_agent_router.models import (
     ParsedQuestion,
     ToolOutput,
 )
+
+# Async callback invoked with an action group name as each backend tool
+# call begins, so callers can surface per-backend progress to the user.
+ProgressCallback = Callable[[str], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -77,15 +82,29 @@ class BedrockAgentOrchestrator:
         self._max_iterations = max_iterations
         self._timeout_seconds = timeout_seconds
 
-    async def ask(self, question: str, session_id: str) -> AgentResponse:
+    async def ask(
+        self,
+        question: str,
+        session_id: str,
+        on_progress: ProgressCallback | None = None,
+    ) -> AgentResponse:
         """Send a question to the Bedrock Agent and handle the return control loop.
+
+        Args:
+            question: The user's question text.
+            session_id: Bedrock Agent session ID (derived from Slack thread context).
+            on_progress: Optional async callback invoked with each action
+                group name as its backend tool call begins. Used to surface
+                per-backend progress (e.g. "Searching Confluence and Jira").
+                Callback errors are swallowed so progress reporting never
+                breaks answer processing.
 
         Returns an AgentResponse in all cases — never raises.
         """
         start = time.monotonic()
         try:
             return await asyncio.wait_for(
-                self._ask_inner(question, session_id, start),
+                self._ask_inner(question, session_id, start, on_progress),
                 timeout=self._timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -107,7 +126,13 @@ class BedrockAgentOrchestrator:
                 failed=True,
             )
 
-    async def _ask_inner(self, question: str, session_id: str, start: float) -> AgentResponse:
+    async def _ask_inner(
+        self,
+        question: str,
+        session_id: str,
+        start: float,
+        on_progress: ProgressCallback | None = None,
+    ) -> AgentResponse:
         """Core return control loop logic.
 
         Flow:
@@ -201,6 +226,7 @@ class BedrockAgentOrchestrator:
                     logger.info("Duplicate tool call detected: %s — using cached result", action_group)
                     tool_output = cached_outputs[cache_key]
                 else:
+                    await self._report_progress(on_progress, action_group)
                     tool_output = await self._execute_tool(action_group, function_name, parameters)
                     cached_outputs[cache_key] = tool_output
                     tool_calls_made.append(action_group)
@@ -278,6 +304,23 @@ class BedrockAgentOrchestrator:
                 result["output"]["text"] += text
 
         return result
+
+    @staticmethod
+    async def _report_progress(on_progress: ProgressCallback | None, action_group: str) -> None:
+        """Invoke the progress callback, swallowing any errors.
+
+        Progress reporting is best-effort UX — a failure here (e.g. a
+        Slack API error while updating a placeholder) must never abort
+        answer processing.
+        """
+        if on_progress is None:
+            return
+        try:
+            await on_progress(action_group)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Progress callback failed for %s: %s", action_group, exc)
 
     async def _execute_tool(self, action_group: str, function_name: str, parameters: dict) -> ToolOutput:
         """Execute a backend call and convert the result to a ToolOutput."""

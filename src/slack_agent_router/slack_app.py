@@ -31,6 +31,17 @@ _UNAUTHORIZED_MSG = "Sorry, this bot is only available to Sage staff."
 _ALL_BACKENDS_FAILED_MSG = "I wasn't able to find an answer right now. Please try again in a few minutes."
 _AGENT_FAILURE_MSG = "I'm having trouble processing your question right now. Please try again in a few minutes."
 
+# Progressive UX feedback (Requirement 4).
+_REACTION_WORKING = "eyes"  # 👀 — added on receipt
+_REACTION_DONE = "white_check_mark"  # ✅ — added when the answer is posted
+_PLACEHOLDER_THINKING = "⏳ Thinking..."
+
+# Maps a Bedrock action group name to a user-facing "searching…" message.
+_ACTION_GROUP_PROGRESS: dict[str, str] = {
+    "SearchConfluenceJira": "⏳ Searching Confluence and Jira...",
+}
+_PROGRESS_DEFAULT = "⏳ Searching..."
+
 
 class SlackAgentApp:
     """Main application using Slack Bolt with async Socket Mode.
@@ -147,6 +158,7 @@ class SlackAgentApp:
         say: Any,
         client: Any,
         thread_ts: str | None = None,
+        reaction_ts: str | None = None,
     ) -> None:
         """Run the full question pipeline on a ParsedQuestion.
 
@@ -158,12 +170,20 @@ class SlackAgentApp:
         in-flight tracking is accurate. Slack 429 errors are retried
         with exponential backoff.
 
+        Progressive UX (Requirement 4): a 👀 reaction is added on receipt,
+        a "⏳ Thinking..." placeholder is posted in the thread and updated
+        as each backend is searched, then replaced with the final answer;
+        the 👀 reaction is swapped for ✅ when the answer is posted.
+
         Args:
             parsed: The normalized question from any Slack input method.
             say: Slack Bolt ``say`` callable for posting messages.
-            client: Slack Web API client for ephemeral messages.
+            client: Slack Web API client for messages and reactions.
             thread_ts: Thread timestamp for reply threading. When None
                        (e.g. slash commands), the reply is not threaded.
+            reaction_ts: Timestamp of the user's message to react to. When
+                       None (e.g. slash commands, which have no message ts),
+                       reactions are skipped.
         """
         # Empty question check
         if not parsed.question.strip():
@@ -185,7 +205,11 @@ class SlackAgentApp:
                 )
                 return
 
-        # Rate limit check
+        # Rate limit check + acquire. Acquire immediately after a successful
+        # check, before any awaits, so the in-flight counter is incremented
+        # synchronously. Awaiting between check() and acquire() would let
+        # concurrent requests all pass check() before any of them increment
+        # in_flight, bypassing the per-user in-flight guard under load.
         if self._rate_limiter is not None:
             allowed, reason = self._rate_limiter.check(parsed.user_id)
             if not allowed:
@@ -195,18 +219,35 @@ class SlackAgentApp:
                     text=reason,
                 )
                 return
-
-        # Acquire rate limiter slot (tracks in-flight + sliding windows)
-        if self._rate_limiter is not None:
             self._rate_limiter.acquire(parsed.user_id)
 
         try:
-            response = await self._dispatch_and_format(parsed)
+            # Progressive UX: acknowledge receipt with a reaction + placeholder.
+            await self._add_reaction(client, parsed.channel_id, reaction_ts, _REACTION_WORKING)
+            placeholder_ts = await self._post_placeholder(client, parsed.channel_id, thread_ts)
+
+            # Progress callback updates the placeholder as each backend is searched.
+            on_progress = self._make_progress_callback(client, parsed.channel_id, placeholder_ts)
+
+            response = await self._dispatch_and_format(parsed, on_progress=on_progress)
         finally:
             if self._rate_limiter is not None:
                 self._rate_limiter.release(parsed.user_id)
 
-        await self._post_with_retry(say, text=response, thread_ts=thread_ts)
+        # Deliver the final answer: update the placeholder in place when we
+        # have one, otherwise post a fresh threaded message.
+        await self._deliver_answer(
+            say,
+            client,
+            channel_id=parsed.channel_id,
+            placeholder_ts=placeholder_ts,
+            text=response,
+            thread_ts=thread_ts,
+        )
+
+        # Swap the working reaction for a done reaction.
+        await self._remove_reaction(client, parsed.channel_id, reaction_ts, _REACTION_WORKING)
+        await self._add_reaction(client, parsed.channel_id, reaction_ts, _REACTION_DONE)
 
     async def handle_event(
         self,
@@ -225,7 +266,14 @@ class SlackAgentApp:
             return
         parsed = self.parse_event(event, bot_user_id)
         thread_ts = parsed.thread_ts or parsed.event_ts
-        await self._process_question(parsed, say=say, client=client, thread_ts=thread_ts)
+        # parsed.event_ts is the user's message ts — the target for reactions.
+        await self._process_question(
+            parsed,
+            say=say,
+            client=client,
+            thread_ts=thread_ts,
+            reaction_ts=parsed.event_ts,
+        )
 
     # ------------------------------------------------------------------
     # Deduplication
@@ -263,16 +311,25 @@ class SlackAgentApp:
             return f"{channel}:{ts}"
         return ""
 
-    async def _dispatch_and_format(self, parsed: ParsedQuestion) -> str:
+    async def _dispatch_and_format(
+        self,
+        parsed: ParsedQuestion,
+        on_progress: Callable[[str], Any] | None = None,
+    ) -> str:
         """Call the orchestrator and return a formatted Slack mrkdwn string.
 
         Handles orchestrator exceptions and returns appropriate error
         messages so the caller always gets a string to post.
+
+        Args:
+            parsed: The normalized question.
+            on_progress: Optional async callback forwarded to the
+                orchestrator to surface per-backend progress.
         """
         session_id = self._derive_session_id(parsed)
 
         try:
-            response: AgentResponse = await self._orchestrator.ask(parsed.question, session_id)
+            response: AgentResponse = await self._orchestrator.ask(parsed.question, session_id, on_progress=on_progress)
         except Exception as exc:
             logger.error(
                 "Orchestrator raised an exception for request %s: %s",
@@ -309,26 +366,19 @@ class SlackAgentApp:
         return response.failed
 
     @staticmethod
-    async def _post_with_retry(
-        say: Any,
-        *,
-        text: str,
-        thread_ts: str | None = None,
-    ) -> None:
-        """Post a message via ``say()``, retrying on Slack 429 errors.
+    async def _slack_call_with_retry(call: Callable[[], Any]) -> Any:
+        """Invoke a Slack API coroutine factory, retrying on 429 errors.
 
-        Retries up to ``_SLACK_MAX_RETRIES`` times with exponential
-        backoff. The delay is ``max(Retry-After, base * 2^attempt)``
-        where base is ``_SLACK_DEFAULT_RETRY_AFTER``, so we always
-        respect the server's requested delay while still backing off.
+        ``call`` is a zero-arg callable returning a fresh awaitable each
+        time (so retries re-issue the request). Retries up to
+        ``_SLACK_MAX_RETRIES`` times with exponential backoff; the delay
+        is ``max(Retry-After, base * 2^attempt)`` so we always respect the
+        server's requested delay while still backing off. Non-429 errors
+        (and exhausted retries) are re-raised.
         """
         for attempt in range(_SLACK_MAX_RETRIES + 1):
             try:
-                kwargs: dict[str, Any] = {"text": text}
-                if thread_ts:
-                    kwargs["thread_ts"] = thread_ts
-                await say(**kwargs)
-                return
+                return await call()
             except Exception as exc:
                 retry_after = _extract_retry_after(exc)
                 if retry_after is not None and attempt < _SLACK_MAX_RETRIES:
@@ -344,6 +394,150 @@ class SlackAgentApp:
                     continue
                 # Not a 429 or exhausted retries — re-raise
                 raise
+
+    async def _post_with_retry(
+        self,
+        say: Any,
+        *,
+        text: str,
+        thread_ts: str | None = None,
+    ) -> None:
+        """Post a message via ``say()``, retrying on Slack 429 errors."""
+
+        def _call() -> Any:
+            kwargs: dict[str, Any] = {"text": text}
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+            return say(**kwargs)
+
+        await self._slack_call_with_retry(_call)
+
+    # ------------------------------------------------------------------
+    # Progressive UX feedback (Requirement 4)
+    # ------------------------------------------------------------------
+
+    async def _add_reaction(
+        self,
+        client: Any,
+        channel_id: str,
+        timestamp: str | None,
+        name: str,
+    ) -> None:
+        """Add an emoji reaction to a message (best-effort).
+
+        No-op when ``timestamp`` is falsy (e.g. slash commands, which
+        have no message to react to). Failures are logged and swallowed
+        so reaction UX never blocks answer delivery.
+        """
+        if not timestamp:
+            return
+        try:
+            await self._slack_call_with_retry(
+                lambda: client.reactions_add(channel=channel_id, timestamp=timestamp, name=name)
+            )
+        except Exception as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            logger.warning("Failed to add reaction '%s': %s", name, exc)
+
+    async def _remove_reaction(
+        self,
+        client: Any,
+        channel_id: str,
+        timestamp: str | None,
+        name: str,
+    ) -> None:
+        """Remove an emoji reaction from a message (best-effort)."""
+        if not timestamp:
+            return
+        try:
+            await self._slack_call_with_retry(
+                lambda: client.reactions_remove(channel=channel_id, timestamp=timestamp, name=name)
+            )
+        except Exception as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            logger.warning("Failed to remove reaction '%s': %s", name, exc)
+
+    async def _post_placeholder(
+        self,
+        client: Any,
+        channel_id: str,
+        thread_ts: str | None,
+    ) -> str | None:
+        """Post the "⏳ Thinking..." placeholder and return its timestamp.
+
+        Returns the message ``ts`` on success so it can be updated later,
+        or ``None`` if posting failed (in which case the caller falls back
+        to posting the answer as a fresh message).
+        """
+        try:
+            kwargs: dict[str, Any] = {"channel": channel_id, "text": _PLACEHOLDER_THINKING}
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+            response = await self._slack_call_with_retry(lambda: client.chat_postMessage(**kwargs))
+        except Exception as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            logger.warning("Failed to post placeholder message: %s", exc)
+            return None
+        # response behaves like a dict (SlackResponse supports __getitem__).
+        try:
+            return response["ts"]
+        except (KeyError, TypeError):
+            logger.warning("Placeholder response missing 'ts'")
+            return None
+
+    def _make_progress_callback(
+        self,
+        client: Any,
+        channel_id: str,
+        placeholder_ts: str | None,
+    ) -> Callable[[str], Any] | None:
+        """Build an async progress callback that updates the placeholder.
+
+        Returns ``None`` when there is no placeholder to update, so the
+        orchestrator skips progress reporting entirely.
+        """
+        if placeholder_ts is None:
+            return None
+
+        async def _on_progress(action_group: str) -> None:
+            text = _ACTION_GROUP_PROGRESS.get(action_group, _PROGRESS_DEFAULT)
+            await self._slack_call_with_retry(
+                lambda: client.chat_update(channel=channel_id, ts=placeholder_ts, text=text)
+            )
+
+        return _on_progress
+
+    async def _deliver_answer(
+        self,
+        say: Any,
+        client: Any,
+        *,
+        channel_id: str,
+        placeholder_ts: str | None,
+        text: str,
+        thread_ts: str | None,
+    ) -> None:
+        """Deliver the final answer, preferring an in-place placeholder update.
+
+        When a placeholder exists, update it via ``chat.update``. If that
+        fails (or there is no placeholder), fall back to posting a fresh
+        threaded message via ``say``.
+        """
+        if placeholder_ts is not None:
+            try:
+                await self._slack_call_with_retry(
+                    lambda: client.chat_update(channel=channel_id, ts=placeholder_ts, text=text)
+                )
+                return
+            except Exception as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                logger.warning("Failed to update placeholder with answer — posting fresh: %s", exc)
+
+        await self._post_with_retry(say, text=text, thread_ts=thread_ts)
 
     # ------------------------------------------------------------------
     # Slack Bolt event handlers (registered in start())

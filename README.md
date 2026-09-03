@@ -58,6 +58,17 @@ The response is posted in the channel where you ran the command.
 
 The bot is restricted to members of the **sage-all** Slack User Group. If you're not in that group, the bot will respond with an ephemeral message saying it's only available to Sage staff. Contact your workspace admin to be added to the group.
 
+### What to expect while it works
+
+The bot gives live feedback so you know it's working on your question:
+
+1. It adds a 👀 reaction to your message the moment it's received.
+2. It posts a **⏳ Thinking...** placeholder reply, which updates to show what it's searching (for example, **⏳ Searching Confluence and Jira...**) as each source is queried.
+3. When the answer is ready, that placeholder is edited in place to become the final answer — so the thread stays tidy.
+4. The 👀 reaction on your message is swapped for a ✅ once the answer is posted.
+
+This feedback is best-effort: if Slack rejects a reaction or placeholder update, the bot still delivers your answer (posting a fresh reply if needed). Slash commands skip the reactions since there's no message to react to, but they still show the thinking placeholder.
+
 ### What it searches
 
 The bot searches Confluence wiki pages and Jira issues via Atlassian Rovo. It works best for questions about:

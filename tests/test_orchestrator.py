@@ -588,3 +588,86 @@ class TestHappyPath:
             result = await orchestrator.ask("test", "C123:1234567890.123456")
 
         assert result.latency_ms >= 0
+
+
+# -------------------------------------------------------
+# Progress callback (task 12.3)
+# -------------------------------------------------------
+
+
+class TestProgressCallback:
+    """The on_progress callback surfaces per-backend progress."""
+
+    async def test_progress_fired_with_action_group(self, orchestrator, rovo_backend):
+        """on_progress is invoked with the action group name before the tool runs."""
+        responses = [
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
+            _make_final_response("PTO is 20 days."),
+        ]
+        call_idx = 0
+
+        async def _invoke_side_effect(*args, **kwargs):
+            nonlocal call_idx
+            resp = responses[min(call_idx, len(responses) - 1)]
+            call_idx += 1
+            return resp
+
+        seen: list[str] = []
+
+        async def on_progress(action_group: str) -> None:
+            seen.append(action_group)
+
+        with patch.object(orchestrator, "_invoke_agent", side_effect=_invoke_side_effect):
+            await orchestrator.ask("What is PTO?", "C123:1234567890.123456", on_progress=on_progress)
+
+        assert seen == ["SearchConfluenceJira"]
+
+    async def test_progress_not_fired_for_cached_duplicate(self, orchestrator, rovo_backend):
+        """A duplicate (cached) tool call does not fire progress again."""
+        responses = [
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
+            _make_final_response("PTO is 20 days."),
+        ]
+        call_idx = 0
+
+        async def _invoke_side_effect(*args, **kwargs):
+            nonlocal call_idx
+            resp = responses[min(call_idx, len(responses) - 1)]
+            call_idx += 1
+            return resp
+
+        seen: list[str] = []
+
+        async def on_progress(action_group: str) -> None:
+            seen.append(action_group)
+
+        with patch.object(orchestrator, "_invoke_agent", side_effect=_invoke_side_effect):
+            await orchestrator.ask("What is PTO?", "C123:1234567890.123456", on_progress=on_progress)
+
+        # Fired once for the real call, skipped for the cached duplicate.
+        assert seen == ["SearchConfluenceJira"]
+
+    async def test_progress_callback_error_does_not_break_answer(self, orchestrator, rovo_backend):
+        """An exception from on_progress is swallowed; the answer is still produced."""
+        responses = [
+            _make_return_control_response("SearchConfluenceJira", "find_content", {"query": "PTO"}),
+            _make_final_response("PTO is 20 days."),
+        ]
+        call_idx = 0
+
+        async def _invoke_side_effect(*args, **kwargs):
+            nonlocal call_idx
+            resp = responses[min(call_idx, len(responses) - 1)]
+            call_idx += 1
+            return resp
+
+        async def on_progress(action_group: str) -> None:
+            raise RuntimeError("callback boom")
+
+        with patch.object(orchestrator, "_invoke_agent", side_effect=_invoke_side_effect):
+            result = await orchestrator.ask("What is PTO?", "C123:1234567890.123456", on_progress=on_progress)
+
+        assert isinstance(result, AgentResponse)
+        assert "PTO is 20 days." in result.answer
+        assert result.failed is False

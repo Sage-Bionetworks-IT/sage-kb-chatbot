@@ -29,6 +29,9 @@ from slack_agent_router.rate_limiter import RateLimiter
 from slack_agent_router.slack_app import (
     _AGENT_FAILURE_MSG,
     _ALL_BACKENDS_FAILED_MSG,
+    _PLACEHOLDER_THINKING,
+    _REACTION_DONE,
+    _REACTION_WORKING,
     SlackAgentApp,
     _extract_retry_after,
 )
@@ -74,6 +77,40 @@ def _make_app(
         auth_check=auth_check or AsyncMock(return_value=True),
         deduplicator=deduplicator,
     )
+
+
+# Placeholder timestamp returned by the mock chat_postMessage.
+_PLACEHOLDER_TS = "1234500000.000001"
+
+
+def _make_client() -> AsyncMock:
+    """Build a mock Slack Web client whose chat_postMessage returns a ts.
+
+    With a real ``ts``, the progressive-UX path is exercised: a placeholder
+    is posted and later updated in place via ``chat_update``.
+    """
+    client = AsyncMock()
+    client.chat_postMessage.return_value = {"ts": _PLACEHOLDER_TS, "channel": "C99999"}
+    return client
+
+
+def _delivered_text(say: AsyncMock, client: AsyncMock) -> str:
+    """Return the answer text delivered to the user, via either path.
+
+    The answer is delivered by updating the placeholder (``chat_update``)
+    when one exists, or by ``say`` as a fallback. This helper returns the
+    text regardless of which path was taken.
+
+    We check ``say`` first because when ``chat_update`` raises and the
+    code falls back to ``say()``, ``chat_update.call_args`` is still set
+    from the failed attempt.  Preferring ``say`` ensures we return the
+    text that was *actually* delivered.
+    """
+    if say.call_args is not None:
+        return say.call_args.kwargs["text"]
+    if client.chat_update.call_args is not None:
+        return client.chat_update.call_args.kwargs["text"]
+    raise AssertionError("No answer was delivered via chat_update or say")
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +459,7 @@ class TestRateLimiterAcquireRelease:
         limiter.acquire.side_effect = lambda uid: call_order.append("acquire")
         limiter.release.side_effect = lambda uid: call_order.append("release")
 
-        async def fake_ask(question: str, session_id: str) -> AgentResponse:
+        async def fake_ask(question: str, session_id: str, on_progress=None) -> AgentResponse:
             call_order.append("ask")
             return AgentResponse(answer="Answer", source_urls=[], tool_calls_made=["tool"], latency_ms=100.0)
 
@@ -440,7 +477,7 @@ class TestRateLimiterAcquireRelease:
             "event_ts": "1234567890.123456",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
@@ -499,12 +536,12 @@ class TestRateLimiterAcquireRelease:
             "event_ts": "1234567890.123456",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
         orch.ask.assert_called_once()
-        say.assert_called_once()
+        assert "Answer" in _delivered_text(say, client)
 
 
 # -------------------------------------------------------
@@ -535,13 +572,11 @@ class TestOrchestratorErrorHandling:
             "event_ts": "1234567890.123456",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
-        say.assert_called_once()
-        posted_text = say.call_args.kwargs["text"]
-        assert posted_text == _AGENT_FAILURE_MSG
+        assert _delivered_text(say, client) == _AGENT_FAILURE_MSG
 
     @pytest.mark.asyncio
     async def test_all_backends_failed_posts_specific_message(self, mock_auth_check) -> None:
@@ -571,13 +606,11 @@ class TestOrchestratorErrorHandling:
             "event_ts": "1234567890.123456",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
-        say.assert_called_once()
-        posted_text = say.call_args.kwargs["text"]
-        assert posted_text == _ALL_BACKENDS_FAILED_MSG
+        assert _delivered_text(say, client) == _ALL_BACKENDS_FAILED_MSG
 
     @pytest.mark.asyncio
     async def test_successful_tool_calls_with_failure_answer_not_treated_as_all_failed(self, mock_auth_check) -> None:
@@ -607,12 +640,11 @@ class TestOrchestratorErrorHandling:
             "event_ts": "1234567890.123456",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
-        say.assert_called_once()
-        posted_text = say.call_args.kwargs["text"]
+        posted_text = _delivered_text(say, client)
         # Should be formatted normally, not the all-backends-failed message
         assert posted_text != _ALL_BACKENDS_FAILED_MSG
 
@@ -633,25 +665,25 @@ class TestSlack429Retry:
 
         call_count = 0
 
-        async def flaky_say(**kwargs: Any) -> None:
+        async def flaky_call() -> None:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise error_429
 
         with patch("slack_agent_router.slack_app.asyncio.sleep", new_callable=AsyncMock):
-            await SlackAgentApp._post_with_retry(flaky_say, text="hello", thread_ts="123")
+            await SlackAgentApp._slack_call_with_retry(flaky_call)
         assert call_count == 2
 
     @pytest.mark.asyncio
     async def test_non_429_error_raises_immediately(self) -> None:
         """A non-429 error should raise immediately without retry."""
 
-        async def failing_say(**kwargs: Any) -> None:
+        async def failing_call() -> None:
             raise ValueError("something else")
 
         with pytest.raises(ValueError, match="something else"):
-            await SlackAgentApp._post_with_retry(failing_say, text="hello")
+            await SlackAgentApp._slack_call_with_retry(failing_call)
 
     @pytest.mark.asyncio
     async def test_429_exhausts_retries(self) -> None:
@@ -661,14 +693,14 @@ class TestSlack429Retry:
 
         call_count = 0
 
-        async def always_429(**kwargs: Any) -> None:
+        async def always_429() -> None:
             nonlocal call_count
             call_count += 1
             raise error_429
 
         with patch("slack_agent_router.slack_app.asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(Exception, match="rate_limited"):
-                await SlackAgentApp._post_with_retry(always_429, text="hello")
+                await SlackAgentApp._slack_call_with_retry(always_429)
 
         # 1 initial + 3 retries = 4 total
         assert call_count == 4
@@ -732,15 +764,16 @@ class TestThreadReplyPosting:
             "event_ts": "1234567890.123456",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
-        say.assert_called_once()
-        call_kwargs = say.call_args.kwargs
-        assert call_kwargs["thread_ts"] == "1234567890.123456"
-        assert "PTO is 20 days" in call_kwargs["text"]
-        assert "https://example.com/pto" in call_kwargs["text"]
+        # The placeholder is posted in-thread; the answer updates it in place.
+        client.chat_postMessage.assert_called_once()
+        assert client.chat_postMessage.call_args.kwargs["thread_ts"] == "1234567890.123456"
+        answer_text = _delivered_text(say, client)
+        assert "PTO is 20 days" in answer_text
+        assert "https://example.com/pto" in answer_text
 
     @pytest.mark.asyncio
     async def test_thread_reply_uses_thread_ts_when_present(self, mock_auth_check) -> None:
@@ -770,12 +803,13 @@ class TestThreadReplyPosting:
             "event_ts": "1234567891.000000",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
-        say.assert_called_once()
-        assert say.call_args.kwargs["thread_ts"] == "1234567890.123456"
+        # The placeholder is posted into the existing thread.
+        client.chat_postMessage.assert_called_once()
+        assert client.chat_postMessage.call_args.kwargs["thread_ts"] == "1234567890.123456"
 
 
 # -------------------------------------------------------
@@ -818,14 +852,12 @@ class TestAgentFailureFallback:
             "event_ts": "1234567890.123456",
         }
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
-        say.assert_called_once()
-        posted_text = say.call_args.kwargs["text"]
-        # The fallback text should be included in the formatted output
-        assert "I had trouble synthesizing" in posted_text
+        # The fallback text should be included in the delivered output
+        assert "I had trouble synthesizing" in _delivered_text(say, client)
 
 
 # -------------------------------------------------------
@@ -867,14 +899,15 @@ class TestEventDeduplication:
         )
         event = _mention_event()
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
         await app.handle_event(event, say=say, client=client, bot_user_id="UBOTID")
 
         # Only the first delivery is processed.
         orch.ask.assert_called_once()
-        say.assert_called_once()
+        # The answer is delivered exactly once (via the placeholder update).
+        client.chat_update.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_duplicate_runs_before_auth_and_rate_limit(self, mock_auth_check) -> None:
@@ -1001,7 +1034,7 @@ class TestEventDeduplication:
         }
         ack = AsyncMock()
         say = AsyncMock()
-        client = AsyncMock()
+        client = _make_client()
 
         await app._handle_slash_command(ack, command, say, client)
         await app._handle_slash_command(ack, command, say, client)
@@ -1009,4 +1042,196 @@ class TestEventDeduplication:
         # Both deliveries are acknowledged, but only one is processed.
         assert ack.call_count == 2
         orch.ask.assert_called_once()
+        # The answer is delivered exactly once (via the placeholder update).
+        client.chat_update.assert_called_once()
+
+
+# -------------------------------------------------------
+# Unit tests: Progressive UX feedback (task 12.3)
+# -------------------------------------------------------
+
+
+def _pto_event() -> dict[str, Any]:
+    """A representative app_mention event."""
+    return {
+        "type": "app_mention",
+        "user": "U12345",
+        "text": "<@UBOTID> What is PTO?",
+        "channel": "C99999",
+        "ts": "1234567890.123456",
+        "team": "T00001",
+        "event_ts": "1234567890.123456",
+    }
+
+
+def _answer_response() -> AgentResponse:
+    return AgentResponse(
+        answer="PTO is 20 days.",
+        source_urls=[],
+        tool_calls_made=["SearchConfluenceJira"],
+        latency_ms=100.0,
+    )
+
+
+class TestProgressiveUX:
+    """Requirement 4: reactions and placeholder-message progress feedback."""
+
+    @pytest.mark.asyncio
+    async def test_working_reaction_added_on_receipt(self, mock_auth_check) -> None:
+        """Requirement 4.1: a 👀 reaction is added to the user's message."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(return_value=_answer_response())
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        say = AsyncMock()
+        client = _make_client()
+
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        client.reactions_add.assert_any_call(channel="C99999", timestamp="1234567890.123456", name=_REACTION_WORKING)
+
+    @pytest.mark.asyncio
+    async def test_thinking_placeholder_posted_in_thread(self, mock_auth_check) -> None:
+        """Requirement 4.2: a "⏳ Thinking..." placeholder is posted in the thread."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(return_value=_answer_response())
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        say = AsyncMock()
+        client = _make_client()
+
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        client.chat_postMessage.assert_called_once()
+        kwargs = client.chat_postMessage.call_args.kwargs
+        assert kwargs["text"] == _PLACEHOLDER_THINKING
+        assert kwargs["thread_ts"] == "1234567890.123456"
+
+    @pytest.mark.asyncio
+    async def test_placeholder_updated_as_backend_searched(self, mock_auth_check) -> None:
+        """Requirement 4.3: the placeholder is updated to show the backend being searched."""
+
+        # The orchestrator fires on_progress with the action group name.
+        async def fake_ask(question: str, session_id: str, on_progress=None) -> AgentResponse:
+            if on_progress is not None:
+                await on_progress("SearchConfluenceJira")
+            return _answer_response()
+
+        orch = AsyncMock()
+        orch.ask = AsyncMock(side_effect=fake_ask)
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        say = AsyncMock()
+        client = _make_client()
+
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        # One update for progress ("Searching...") and one for the final answer.
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        assert any("Searching Confluence and Jira" in t for t in update_texts)
+
+    @pytest.mark.asyncio
+    async def test_final_answer_updates_placeholder(self, mock_auth_check) -> None:
+        """Requirement 4.4: the final answer updates the placeholder via chat.update."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(return_value=_answer_response())
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        say = AsyncMock()
+        client = _make_client()
+
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        # The last chat_update carries the formatted answer, targeting the placeholder ts.
+        last_update = client.chat_update.call_args
+        assert last_update.kwargs["ts"] == _PLACEHOLDER_TS
+        assert "PTO is 20 days" in last_update.kwargs["text"]
+        # The answer is delivered in place, not as a fresh say() message.
+        say.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_working_reaction_swapped_for_done(self, mock_auth_check) -> None:
+        """Requirement 4.5: 👀 is removed and ✅ is added when the answer is posted."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(return_value=_answer_response())
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        say = AsyncMock()
+        client = _make_client()
+
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        client.reactions_remove.assert_called_once_with(
+            channel="C99999", timestamp="1234567890.123456", name=_REACTION_WORKING
+        )
+        client.reactions_add.assert_any_call(channel="C99999", timestamp="1234567890.123456", name=_REACTION_DONE)
+
+    @pytest.mark.asyncio
+    async def test_slash_command_skips_reactions(self, mock_auth_check) -> None:
+        """Slash commands have no message ts, so no reactions are added."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(return_value=_answer_response())
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        command = {
+            "command": "/sage-ask",
+            "text": "What is PTO?",
+            "user_id": "U12345",
+            "channel_id": "C99999",
+            "team_id": "T00001",
+            "trigger_id": "trigger_abc123",
+        }
+        ack = AsyncMock()
+        say = AsyncMock()
+        client = _make_client()
+
+        await app._handle_slash_command(ack, command, say, client)
+
+        client.reactions_add.assert_not_called()
+        client.reactions_remove.assert_not_called()
+        # But the placeholder + answer flow still runs.
+        client.chat_postMessage.assert_called_once()
+        client.chat_update.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_say_when_placeholder_fails(self, mock_auth_check) -> None:
+        """If posting the placeholder fails, the answer is posted via say()."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(return_value=_answer_response())
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        say = AsyncMock()
+        client = _make_client()
+        # Placeholder post fails outright.
+        client.chat_postMessage.side_effect = RuntimeError("cannot post")
+
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        # No placeholder ts → no chat_update; answer falls back to say().
+        client.chat_update.assert_not_called()
         say.assert_called_once()
+        assert "PTO is 20 days" in say.call_args.kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_reaction_failure_does_not_block_answer(self, mock_auth_check) -> None:
+        """A failing reactions_add must not prevent the answer from being delivered."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(return_value=_answer_response())
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        say = AsyncMock()
+        client = _make_client()
+        client.reactions_add.side_effect = RuntimeError("reaction denied")
+
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        # Answer still delivered despite reaction failures.
+        assert "PTO is 20 days" in _delivered_text(say, client)
