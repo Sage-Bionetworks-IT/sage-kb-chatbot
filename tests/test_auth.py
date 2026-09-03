@@ -1,12 +1,15 @@
 """Unit tests for UserGroupAuthorizer (Slack User Group authorization).
 
 Covers:
-- Membership check happy path (member allowed, non-member denied)
-- Lazy User Group handle → ID resolution
+- Allow-all default (no include/exclude configured)
+- Include-list membership (member allowed, non-member denied)
+- Exclude-list denial and exclude-wins-over-include precedence
+- Multiple include groups (union membership)
+- Lazy User Group handle → ID resolution (and caching across refreshes)
 - Caching / TTL behavior (no re-fetch within TTL, refresh after expiry)
 - Concurrent refresh serialization (double-check after lock)
-- Failure handling: unresolvable group (deny-all + short retry TTL),
-  Slack API error responses, and exceptions (fall back to stale cache)
+- Failure handling: unresolvable group (short retry TTL), Slack API
+  error responses, and exceptions (fall back to stale cache)
 
 Validates: Requirements 2.1, 2.2, 2.3
 """
@@ -24,20 +27,38 @@ from slack_agent_router.auth import UserGroupAuthorizer
 
 
 def _make_client(*, members: list[str] | None = None, handle: str = "sage-all") -> AsyncMock:
-    """Build a mock async Slack client that resolves *handle* and lists *members*.
+    """Build a mock async Slack client resolving a single *handle* with *members*.
 
     ``usergroups_list`` returns a single group matching *handle* with ID
-    "S123", and ``usergroups_users_list`` returns *members*.
+    "S0", and ``usergroups_users_list`` returns *members* for it.
     """
+    return _make_multi_client({handle: members if members is not None else []})
+
+
+def _make_multi_client(groups: dict[str, list[str]]) -> AsyncMock:
+    """Build a mock async Slack client for multiple groups.
+
+    ``groups`` maps handle → member list. Each handle is assigned a synthetic
+    ID ("S<index>"); ``usergroups_list`` returns all of them and
+    ``usergroups_users_list`` returns the members for the requested ID.
+    """
+    handle_to_id: dict[str, str] = {}
+    id_to_members: dict[str, list[str]] = {}
+    for i, (handle, members) in enumerate(groups.items()):
+        gid = f"S{i}"
+        handle_to_id[handle] = gid
+        id_to_members[gid] = members
+
     client = AsyncMock()
     client.usergroups_list.return_value = {
         "ok": True,
-        "usergroups": [{"id": "S123", "handle": handle}],
+        "usergroups": [{"id": gid, "handle": h} for h, gid in handle_to_id.items()],
     }
-    client.usergroups_users_list.return_value = {
-        "ok": True,
-        "users": members if members is not None else [],
-    }
+
+    async def _users_list(*, usergroup: str):
+        return {"ok": True, "users": id_to_members.get(usergroup, [])}
+
+    client.usergroups_users_list.side_effect = _users_list
     return client
 
 
@@ -59,36 +80,110 @@ def _controllable_clock(start: float = 1000.0):
 
 
 # ---------------------------------------------------------------------------
-# is_authorized — happy path
+# Allow-all default
 # ---------------------------------------------------------------------------
 
 
-class TestIsAuthorized:
-    async def test_member_is_authorized(self) -> None:
-        client = _make_client(members=["U1", "U2"])
+class TestAllowAllDefault:
+    async def test_no_lists_allows_everyone(self) -> None:
+        """With neither include nor exclude configured, every user is allowed."""
+        client = _make_client(members=[])
         authorizer = UserGroupAuthorizer(client)
+
+        assert await authorizer.is_authorized("anyone") is True
+        # No restriction → no need to hit the Slack API at all.
+        client.usergroups_list.assert_not_awaited()
+
+    def test_enforces_authorization_flag(self) -> None:
+        """enforces_authorization reflects whether any list is configured."""
+        client = _make_client()
+        assert UserGroupAuthorizer(client).enforces_authorization is False
+        assert UserGroupAuthorizer(client, include_handles=["it"]).enforces_authorization is True
+        assert UserGroupAuthorizer(client, exclude_handles=["bots"]).enforces_authorization is True
+
+
+# ---------------------------------------------------------------------------
+# Include list
+# ---------------------------------------------------------------------------
+
+
+class TestIncludeList:
+    async def test_member_is_authorized(self) -> None:
+        client = _make_client(members=["U1", "U2"], handle="it-team")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"])
 
         assert await authorizer.is_authorized("U1") is True
 
     async def test_non_member_is_denied(self) -> None:
-        client = _make_client(members=["U1", "U2"])
-        authorizer = UserGroupAuthorizer(client)
+        client = _make_client(members=["U1", "U2"], handle="it-team")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"])
 
         assert await authorizer.is_authorized("U999") is False
 
-    async def test_resolves_configured_handle(self) -> None:
-        """The authorizer resolves the handle it was configured with."""
-        client = _make_client(members=["U1"], handle="custom-group")
-        authorizer = UserGroupAuthorizer(client, usergroup_handle="custom-group")
+    async def test_union_across_multiple_include_groups(self) -> None:
+        """A user in ANY included group is authorized."""
+        client = _make_multi_client({"it-team": ["U1"], "sec-team": ["U2"]})
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team", "sec-team"])
 
         assert await authorizer.is_authorized("U1") is True
-        client.usergroups_users_list.assert_awaited_once_with(usergroup="S123")
+        assert await authorizer.is_authorized("U2") is True
+        assert await authorizer.is_authorized("U3") is False
 
+    async def test_deprecated_usergroup_handle_alias(self) -> None:
+        """The legacy usergroup_handle kwarg maps to the include list."""
+        client = _make_client(members=["U1"], handle="legacy")
+        authorizer = UserGroupAuthorizer(client, usergroup_handle="legacy")
+
+        assert await authorizer.is_authorized("U1") is True
+        assert await authorizer.is_authorized("U2") is False
+
+
+# ---------------------------------------------------------------------------
+# Exclude list + precedence
+# ---------------------------------------------------------------------------
+
+
+class TestExcludeList:
+    async def test_excluded_user_denied_with_empty_include(self) -> None:
+        """Exclude alone: everyone allowed except excluded members."""
+        client = _make_multi_client({"contractors": ["U9"]})
+        authorizer = UserGroupAuthorizer(client, exclude_handles=["contractors"])
+
+        assert await authorizer.is_authorized("U1") is True  # allow-all baseline
+        assert await authorizer.is_authorized("U9") is False  # excluded
+
+    async def test_exclude_overrides_include(self) -> None:
+        """A user in both include and exclude is denied (exclude wins)."""
+        client = _make_multi_client({"it-team": ["U1", "U2"], "contractors": ["U2"]})
+        authorizer = UserGroupAuthorizer(
+            client,
+            include_handles=["it-team"],
+            exclude_handles=["contractors"],
+        )
+
+        assert await authorizer.is_authorized("U1") is True
+        assert await authorizer.is_authorized("U2") is False  # excluded despite include
+
+    async def test_union_across_multiple_exclude_groups(self) -> None:
+        client = _make_multi_client({"bots": ["U8"], "contractors": ["U9"]})
+        authorizer = UserGroupAuthorizer(client, exclude_handles=["bots", "contractors"])
+
+        assert await authorizer.is_authorized("U8") is False
+        assert await authorizer.is_authorized("U9") is False
+        assert await authorizer.is_authorized("U1") is True
+
+
+# ---------------------------------------------------------------------------
+# Resolution caching
+# ---------------------------------------------------------------------------
+
+
+class TestResolution:
     async def test_resolution_happens_once(self) -> None:
         """The handle → ID resolution is cached across refreshes."""
         clock, advance = _controllable_clock()
-        client = _make_client(members=["U1"])
-        authorizer = UserGroupAuthorizer(client, cache_ttl_seconds=300)
+        client = _make_client(members=["U1"], handle="it-team")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
 
         with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
             await authorizer.is_authorized("U1")
@@ -108,8 +203,8 @@ class TestIsAuthorized:
 class TestCaching:
     async def test_no_refetch_within_ttl(self) -> None:
         """Repeated checks within the TTL hit the cache, not the API."""
-        client = _make_client(members=["U1"])
-        authorizer = UserGroupAuthorizer(client, cache_ttl_seconds=300)
+        client = _make_client(members=["U1"], handle="it-team")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
 
         await authorizer.is_authorized("U1")
         await authorizer.is_authorized("U1")
@@ -121,12 +216,13 @@ class TestCaching:
     async def test_refetch_after_ttl_expiry(self) -> None:
         """After the TTL expires, the member list is refreshed."""
         clock, advance = _controllable_clock()
-        client = _make_client(members=["U1"])
-        authorizer = UserGroupAuthorizer(client, cache_ttl_seconds=300)
+        client = _make_client(members=["U1"], handle="it-team")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
 
         with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
             assert await authorizer.is_authorized("U1") is True
             # Membership changes; new list drops U1 and adds U2.
+            client.usergroups_users_list.side_effect = None
             client.usergroups_users_list.return_value = {"ok": True, "users": ["U2"]}
             advance(301)
             assert await authorizer.is_authorized("U1") is False
@@ -143,7 +239,7 @@ class TestCaching:
         after acquiring the lock and returns early without a second fetch.
         """
         clock, advance = _controllable_clock()
-        client = _make_client(members=["U1"])
+        client = _make_client(members=["U1"], handle="it-team")
         release = asyncio.Event()
 
         async def gated_users_list(*args, **kwargs):
@@ -151,7 +247,7 @@ class TestCaching:
             return {"ok": True, "users": ["U1"]}
 
         client.usergroups_users_list.side_effect = gated_users_list
-        authorizer = UserGroupAuthorizer(client, cache_ttl_seconds=300)
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
 
         with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
             first = asyncio.create_task(authorizer.is_authorized("U1"))
@@ -176,26 +272,26 @@ class TestCaching:
 
 
 class TestFailureHandling:
-    async def test_unresolvable_group_denies_all(self) -> None:
-        """A missing handle resolves to None → deny everyone."""
+    async def test_unresolvable_include_group_denies(self) -> None:
+        """A missing include handle resolves to nothing → member denied."""
         client = AsyncMock()
         client.usergroups_list.return_value = {
             "ok": True,
             "usergroups": [{"id": "S999", "handle": "some-other-group"}],
         }
-        authorizer = UserGroupAuthorizer(client, usergroup_handle="sage-all")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"])
 
         assert await authorizer.is_authorized("U1") is False
         # Never attempts to list members for an unresolved group.
         client.usergroups_users_list.assert_not_awaited()
 
     async def test_unresolvable_group_uses_short_retry_ttl(self) -> None:
-        """When the group can't be resolved, the retry TTL is capped at 30s."""
+        """When a group can't be resolved, the retry TTL is capped at 30s."""
         clock, advance = _controllable_clock()
         client = AsyncMock()
         client.usergroups_list.return_value = {"ok": True, "usergroups": []}
-        # cache_ttl is large, but the deny-all path caps retry at min(ttl, 30).
-        authorizer = UserGroupAuthorizer(client, cache_ttl_seconds=300)
+        # cache_ttl is large, but the unresolved path caps retry at min(ttl, 30).
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
 
         with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
             await authorizer.is_authorized("U1")
@@ -209,10 +305,10 @@ class TestFailureHandling:
             assert client.usergroups_list.await_count == 2
 
     async def test_usergroups_list_api_error_denies(self) -> None:
-        """An ok:false from usergroups.list → unresolved → deny."""
+        """An ok:false from usergroups.list → unresolved → deny an include member."""
         client = AsyncMock()
         client.usergroups_list.return_value = {"ok": False, "error": "ratelimited"}
-        authorizer = UserGroupAuthorizer(client)
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"])
 
         assert await authorizer.is_authorized("U1") is False
         client.usergroups_users_list.assert_not_awaited()
@@ -222,18 +318,18 @@ class TestFailureHandling:
         client = AsyncMock()
         client.usergroups_list.return_value = {
             "ok": True,
-            "usergroups": [{"id": "S123", "handle": "sage-all"}],
+            "usergroups": [{"id": "S123", "handle": "it-team"}],
         }
         client.usergroups_users_list.return_value = {"ok": False, "error": "fatal_error"}
-        authorizer = UserGroupAuthorizer(client)
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"])
 
         assert await authorizer.is_authorized("U1") is False
 
     async def test_exception_falls_back_to_stale_cache(self) -> None:
         """On a raised API exception, the previously cached members are retained."""
         clock, advance = _controllable_clock()
-        client = _make_client(members=["U1"])
-        authorizer = UserGroupAuthorizer(client, cache_ttl_seconds=300)
+        client = _make_client(members=["U1"], handle="it-team")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
 
         with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
             # Prime the cache with U1 as a member.
@@ -247,6 +343,6 @@ class TestFailureHandling:
         """An exception on the very first refresh (empty cache) denies the user."""
         client = AsyncMock()
         client.usergroups_list.side_effect = RuntimeError("boom")
-        authorizer = UserGroupAuthorizer(client)
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"])
 
         assert await authorizer.is_authorized("U1") is False

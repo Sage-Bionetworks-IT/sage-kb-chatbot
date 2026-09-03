@@ -101,43 +101,60 @@ This project integrates with several external services. Each needs to be configu
 6. Add the bot to channels where it should respond
 7. Add the **OAuth scope** `usergroups:read` to the bot token — this is required for the authorization check
 
-### Authorization (User Group)
+### Authorization (User Groups)
 
-The bot restricts access to members of a Slack User Group. By default it checks the **sage-all** group.
+Access is controlled by two optional Slack User Group lists: an **include** (allow) list and an **exclude** (deny) list. **By default both are empty, so the bot is open to all workspace users.**
+
+**Access rule:**
+
+```
+allowed = (include empty OR user in an included group)
+          AND (user NOT in any excluded group)
+```
+
+- `slack_authorized_usergroups` (include) — when non-empty, only members of these groups may use the bot; everyone else is denied.
+- `slack_excluded_usergroups` (exclude) — members of these groups are always denied, **even if they are also in an included group**. Exclude wins over include.
+
+When both lists are empty the authorizer is skipped entirely (`auth_check=None`), and `main.py` logs a warning that the bot is open to all users.
 
 **How it works:**
 
-1. On first request (or after cache expiry), the bot calls `usergroups.list` to resolve the group handle → ID
-2. It calls `usergroups.users.list` to fetch the member list
-3. The member list is cached for 5 minutes to avoid excessive API calls
-4. Each incoming event is checked against the cached member set before any processing
+1. On first request (or after cache expiry), the bot calls `usergroups.list` to resolve each configured group handle → ID
+2. It calls `usergroups.users.list` per group and unions the members into an include set and an exclude set
+3. The member sets are cached for 5 minutes to avoid excessive API calls
+4. Each incoming event is checked against the cached sets (exclude first, then include) before any processing
 
 **Required Slack permissions:**
 
 | OAuth Scope | Purpose |
 |-------------|---------|
-| `usergroups:read` | List User Groups and resolve the group handle to its ID |
+| `usergroups:read` | List User Groups and resolve group handles to their IDs |
 
 **Behavior on errors:**
 
-- If the User Group can't be resolved (e.g. it doesn't exist), all users are denied until the next refresh attempt (30s retry)
-- If the API fails after the group was previously resolved, the stale cache is used — existing members continue to work, but new members won't be recognized until a successful refresh
+- If a group can't be resolved (e.g. it doesn't exist), that group contributes no members and the cache uses a short 30s retry TTL so resolution is retried soon. Note the fail-open implication: an unresolved **exclude** group means its members are not blocked until it resolves.
+- If the API fails after a group was previously resolved, the stale cache is retained — a transient failure won't wipe a good member set.
 
-**Customizing the group:**
+**Configuring the lists:**
 
-Set `slack_authorized_usergroup` in your `config.yaml` or via the `SLACK_AUTHORIZED_USERGROUP` environment variable:
+Each list may be a YAML list in `config.yaml`, or a comma-separated string via the matching environment variable (`SLACK_AUTHORIZED_USERGROUPS` / `SLACK_EXCLUDED_USERGROUPS`), which override the file. Use group **handles** (the `@`-mention slug), without the `@`.
 
 ```yaml
-# config.yaml
-slack_authorized_usergroup: my-custom-group
+# config.yaml — only IT and Security may use the bot, minus contractors
+slack_authorized_usergroups:
+  - it-team
+  - sec-team
+slack_excluded_usergroups:
+  - contractors
 ```
 
 ```bash
-# or via environment variable
-export SLACK_AUTHORIZED_USERGROUP=my-custom-group
+# or via environment variables (comma-separated)
+export SLACK_AUTHORIZED_USERGROUPS=it-team,sec-team
+export SLACK_EXCLUDED_USERGROUPS=contractors
 ```
 
-If omitted, it defaults to `sage-all`.
+Omit both (or leave them empty) to allow all users.
 
 ### Atlassian Rovo (Confluence/Jira)
 

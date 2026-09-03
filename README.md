@@ -56,7 +56,12 @@ The response is posted in the channel where you ran the command.
 
 ### Who can use it
 
-The bot is restricted to members of the **sage-all** Slack User Group. If you're not in that group, the bot will respond with an ephemeral message saying it's only available to Sage staff. Contact your workspace admin to be added to the group.
+By default the bot is available to everyone in the workspace. Access can be narrowed with two optional Slack User Group lists:
+
+- An **allow list** — when set, only members of those groups may use the bot.
+- A **deny list** — members of those groups are always blocked, even if they're in an allowed group.
+
+If you're not authorized, the bot replies with an ephemeral message saying it's only available to Sage staff; contact your workspace admin to be added to an allowed group. Admins can configure the lists via `slack_authorized_usergroups` and `slack_excluded_usergroups` — see [CONTRIBUTING.md](CONTRIBUTING.md#authorization-user-groups).
 
 ### What to expect while it works
 

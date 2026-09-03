@@ -14,6 +14,28 @@ slack_agent_router_secret_id: slack-agent-router/dev
 export BEDROCK_AGENT_ID=your-agent-id
 export BEDROCK_AGENT_ALIAS_ID=your-alias-id
 #
-# Slack User Group handle for authorization (without @).
-# Only members of this group can use the bot.
-slack_authorized_usergroup: your-slack-group
+# Authorization by Slack User Group (handles without the @ prefix).
+#
+# Default (both lists empty / omitted): the bot is open to ALL users in
+# the workspace.
+#
+# Access rule:
+#   allowed = (include empty OR user in an included group)
+#             AND (user NOT in any excluded group)
+# Exclude always wins over include.
+#
+# slack_authorized_usergroups: when non-empty, only members of these
+#   groups may use the bot (everyone else is denied).
+# slack_excluded_usergroups: members of these groups are always denied,
+#   even if they are also in an included group.
+#
+# May be given as a YAML list (below) or, via the matching environment
+# variables, as a comma-separated string:
+#   SLACK_AUTHORIZED_USERGROUPS=it-team,sec-team
+#   SLACK_EXCLUDED_USERGROUPS=contractors
+#
+# slack_authorized_usergroups:
+#   - it-team
+#   - sec-team
+# slack_excluded_usergroups:
+#   - contractors

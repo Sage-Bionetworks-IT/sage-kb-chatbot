@@ -39,9 +39,10 @@ _ATLASSIAN_CLOUD_ID_ENV = "ATLASSIAN_CLOUD_ID"
 _BEDROCK_AGENT_ID_ENV = "BEDROCK_AGENT_ID"
 _BEDROCK_AGENT_ALIAS_ID_ENV = "BEDROCK_AGENT_ALIAS_ID"
 _SLACK_AGENT_ROUTER_SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"  # pragma: allowlist secret
-_SLACK_AUTHORIZED_USERGROUP_ENV = "SLACK_AUTHORIZED_USERGROUP"
+_SLACK_AUTHORIZED_USERGROUPS_ENV = "SLACK_AUTHORIZED_USERGROUPS"
+_SLACK_EXCLUDED_USERGROUPS_ENV = "SLACK_EXCLUDED_USERGROUPS"
 
-# Maps AppConfig field name → environment variable name.
+# Maps AppConfig field name → environment variable name (string-valued fields).
 _ENV_MAP: dict[str, str] = {
     "atlassian_service_user": _ATLASSIAN_SERVICE_USER_ENV,
     "rovo_mcp_server_url": _ROVO_MCP_SERVER_URL_ENV,
@@ -49,13 +50,19 @@ _ENV_MAP: dict[str, str] = {
     "bedrock_agent_id": _BEDROCK_AGENT_ID_ENV,
     "bedrock_agent_alias_id": _BEDROCK_AGENT_ALIAS_ID_ENV,
     "slack_agent_router_secret_id": _SLACK_AGENT_ROUTER_SECRET_ID_ENV,
-    "slack_authorized_usergroup": _SLACK_AUTHORIZED_USERGROUP_ENV,
 }
 
-# Fields that have defaults and are not required in config/env.
-_OPTIONAL_FIELDS: dict[str, str] = {
-    "slack_authorized_usergroup": "sage-all",
+# Maps AppConfig field name → environment variable name (list-valued fields).
+# In env vars these are comma-separated; in a config file they may be a YAML
+# list or a comma-separated string. Both default to an empty list, which
+# means "no authorization restriction" (allow all users).
+_LIST_ENV_MAP: dict[str, str] = {
+    "slack_authorized_usergroups": _SLACK_AUTHORIZED_USERGROUPS_ENV,
+    "slack_excluded_usergroups": _SLACK_EXCLUDED_USERGROUPS_ENV,
 }
+
+# String fields that have defaults and are not required in config/env.
+_OPTIONAL_FIELDS: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -68,7 +75,13 @@ class AppConfig:
     bedrock_agent_id: str
     bedrock_agent_alias_id: str
     slack_agent_router_secret_id: str
-    slack_authorized_usergroup: str = "sage-all"
+    # Slack User Group handles (without @) whose members may use the bot.
+    # Empty means allow all users. A user must be in one of these groups
+    # (when non-empty) and not in slack_excluded_usergroups.
+    slack_authorized_usergroups: tuple[str, ...] = ()
+    # Slack User Group handles (without @) whose members are always denied,
+    # overriding the include list. Empty means no exclusions.
+    slack_excluded_usergroups: tuple[str, ...] = ()
 
 
 def load_config(config_path: str | None = None) -> AppConfig:
@@ -93,7 +106,10 @@ def load_config(config_path: str | None = None) -> AppConfig:
     * ``BEDROCK_AGENT_ID``       — Amazon Bedrock Agent ID
     * ``BEDROCK_AGENT_ALIAS_ID`` — Amazon Bedrock Agent alias ID
     * ``SLACK_AGENT_ROUTER_SECRET_ID`` — Secrets Manager secret name or ARN
-    * ``SLACK_AUTHORIZED_USERGROUP``   — Slack User Group handle for authorization (default: sage-all)
+    * ``SLACK_AUTHORIZED_USERGROUPS``  — Comma-separated Slack User Group
+      handles whose members may use the bot. Empty means allow all users.
+    * ``SLACK_EXCLUDED_USERGROUPS``    — Comma-separated Slack User Group
+      handles whose members are always denied (overrides the include list).
 
     Raises:
         RuntimeError: If any required config value is missing after
@@ -103,8 +119,8 @@ def load_config(config_path: str | None = None) -> AppConfig:
     # --- Load base values from config file --------------------------
     file_values = _load_config_file(config_path)
 
-    # --- Apply environment variable overrides -----------------------
-    values: dict[str, str] = {}
+    # --- Apply environment variable overrides (string fields) -------
+    values: dict[str, Any] = {}
     for field_name, env_var in _ENV_MAP.items():
         env_value = os.environ.get(env_var, "").strip()
         if env_value:
@@ -112,10 +128,20 @@ def load_config(config_path: str | None = None) -> AppConfig:
         elif field_name in file_values and file_values[field_name]:
             values[field_name] = str(file_values[field_name]).strip()
 
-    # --- Apply defaults for optional fields -------------------------
+    # --- Apply defaults for optional string fields ------------------
     for field_name, default in _OPTIONAL_FIELDS.items():
         if not values.get(field_name):
             values[field_name] = default
+
+    # --- Resolve list-valued fields (env overrides file) ------------
+    for field_name, env_var in _LIST_ENV_MAP.items():
+        env_value = os.environ.get(env_var)
+        if env_value is not None and env_value.strip():
+            values[field_name] = _parse_handle_list(env_value)
+        elif field_name in file_values:
+            values[field_name] = _parse_handle_list(file_values[field_name])
+        else:
+            values[field_name] = ()
 
     # --- Validate all required fields are present -------------------
     missing: list[str] = []
@@ -129,6 +155,25 @@ def load_config(config_path: str | None = None) -> AppConfig:
         raise RuntimeError(f"Missing required configuration: {', '.join(missing)}")
 
     return AppConfig(**values)
+
+
+def _parse_handle_list(raw: Any) -> tuple[str, ...]:
+    """Normalize a handle-list config value into a tuple of handles.
+
+    Accepts a comma-separated string (from an env var or a scalar config
+    value) or a list/tuple (from YAML/JSON). Whitespace is trimmed, empty
+    entries dropped, order preserved, and duplicates removed.
+    """
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        items = raw.split(",")
+    elif isinstance(raw, (list, tuple)):
+        items = [str(item) for item in raw]
+    else:
+        items = [str(raw)]
+    cleaned = [item.strip() for item in items if str(item).strip()]
+    return tuple(dict.fromkeys(cleaned))
 
 
 def _load_config_file(config_path: str | None = None) -> dict[str, Any]:
@@ -370,8 +415,14 @@ async def main() -> None:
     slack_web_client = AsyncWebClient(token=secrets["slack_bot_token"])
     authorizer = UserGroupAuthorizer(
         slack_client=slack_web_client,
-        usergroup_handle=config.slack_authorized_usergroup,
+        include_handles=list(config.slack_authorized_usergroups),
+        exclude_handles=list(config.slack_excluded_usergroups),
     )
+    # When neither an include nor an exclude list is configured, the bot is
+    # open to all users — skip wiring the auth check entirely.
+    auth_check = authorizer.is_authorized if authorizer.enforces_authorization else None
+    if auth_check is None:
+        logger.warning("No Slack User Group authorization configured — the bot is open to all workspace users")
 
     # --- Slack app ---------------------------------------------------
     from slack_agent_router.slack_app import SlackAgentApp
@@ -381,7 +432,7 @@ async def main() -> None:
         app_token=secrets["slack_app_token"],
         orchestrator=orchestrator,
         rate_limiter=rate_limiter,
-        auth_check=authorizer.is_authorized,
+        auth_check=auth_check,
         deduplicator=deduplicator,
     )
 
