@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 _URL_PATTERN = re.compile(r"https?://[^\s\]>\"']+")
 
+# Jira issue key: a project key (letters/digits, starting with a letter)
+# followed by a hyphen and an issue number, e.g. "IT-5205". Matched
+# case-insensitively so a lowercase "it-5205" is recognised too; keys are
+# normalised to uppercase before use. Bounded so we don't match substrings
+# inside longer tokens.
+_JIRA_KEY_PATTERN = re.compile(r"\b([A-Za-z][A-Za-z0-9]+-\d+)\b")
+
 
 class RovoMCPBackend:
     """Atlassian Rovo MCP Server integration.
@@ -273,14 +280,36 @@ class RovoMCPBackend:
             escaped = question.replace('"', '\\"')
             args["cql"] = f'siteSearch ~ "{escaped}"'
         elif tool_name == "searchJiraIssuesUsingJql":
-            # JQL text search
-            escaped = question.replace('"', '\\"')
-            args["jql"] = f'text ~ "{escaped}"'
+            args["jql"] = self._build_jira_jql(question)
         else:
             # Generic fallback
             args["query"] = question
 
         return args
+
+    @staticmethod
+    def _build_jira_jql(question: str) -> str:
+        """Build a JQL query for a natural-language Jira question.
+
+        When the question references one or more Jira issue keys (e.g.
+        "IT-5205"), we match them with ``key in (...)`` — an exact key
+        lookup. A plain ``text ~`` search does NOT reliably match an
+        issue by its key, so questions like "what is IT-5205 about?"
+        would otherwise return nothing.
+
+        The full-text ``text ~`` clause is OR'd in as well so the query
+        still surfaces issues that merely mention the key in their body,
+        and so keyword-only questions (no key) keep working.
+        """
+        escaped = question.replace('"', '\\"')
+        text_clause = f'text ~ "{escaped}"'
+
+        keys = _extract_jira_keys(question)
+        if not keys:
+            return text_clause
+
+        key_list = ", ".join(keys)
+        return f"key in ({key_list}) OR {text_clause}"
 
     def _parse_mcp_result(self, mcp_result: CallToolResult, start: float) -> BackendResult:
         """Convert an MCP tool result into a BackendResult."""
@@ -327,6 +356,17 @@ class RovoMCPBackend:
             if getattr(item, "type", None) == "text" and getattr(item, "text", None):
                 parts.append(item.text)
         return "\n\n".join(parts)
+
+
+def _extract_jira_keys(text: str) -> list[str]:
+    """Return unique Jira issue keys found in *text*, in order of appearance.
+
+    Matches keys like ``IT-5205`` or ``ABC1-42`` case-insensitively,
+    normalising each to uppercase. Deduplicates while preserving order
+    so the resulting JQL is stable.
+    """
+    keys = (m.upper() for m in _JIRA_KEY_PATTERN.findall(text))
+    return list(dict.fromkeys(keys))
 
 
 def _extract_urls(text: str) -> list[str]:
