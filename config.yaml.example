@@ -11,5 +11,9 @@ slack_agent_router_secret_id: slack-agent-router/dev
 
 # bedrock_agent_id / bedrock_agent_alias_id come from the deployed BedrockAgentStack.
 # In ECS they are injected by CDK. For local runs, export them as environment variables:
-#   export BEDROCK_AGENT_ID=your-agent-id
-#   export BEDROCK_AGENT_ALIAS_ID=your-alias-id
+export BEDROCK_AGENT_ID=your-agent-id
+export BEDROCK_AGENT_ALIAS_ID=your-alias-id
+#
+# Slack User Group handle for authorization (without @).
+# Only members of this group can use the bot.
+slack_authorized_usergroup: your-slack-group

@@ -184,7 +184,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Skip processing silently for duplicate events
     - _Requirements: 1.5, 1.6_
 
-  - [ ] 12.2 Implement authorization check (GREEN)
+  - [x] 12.2 Implement authorization check (GREEN)
     - Check user membership in authorized Slack User Group (sage-all) before processing
     - Respond with ephemeral message for unauthorized users
     - Run authorization after deduplication and before rate limiting

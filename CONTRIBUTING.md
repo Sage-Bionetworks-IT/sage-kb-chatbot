@@ -99,6 +99,45 @@ This project integrates with several external services. Each needs to be configu
    - `message.im` — direct messages to the bot
 5. Register the `/sage-ask` **slash command**
 6. Add the bot to channels where it should respond
+7. Add the **OAuth scope** `usergroups:read` to the bot token — this is required for the authorization check
+
+### Authorization (User Group)
+
+The bot restricts access to members of a Slack User Group. By default it checks the **sage-all** group.
+
+**How it works:**
+
+1. On first request (or after cache expiry), the bot calls `usergroups.list` to resolve the group handle → ID
+2. It calls `usergroups.users.list` to fetch the member list
+3. The member list is cached for 5 minutes to avoid excessive API calls
+4. Each incoming event is checked against the cached member set before any processing
+
+**Required Slack permissions:**
+
+| OAuth Scope | Purpose |
+|-------------|---------|
+| `usergroups:read` | List User Groups and resolve the group handle to its ID |
+
+**Behavior on errors:**
+
+- If the User Group can't be resolved (e.g. it doesn't exist), all users are denied until the next refresh attempt (30s retry)
+- If the API fails after the group was previously resolved, the stale cache is used — existing members continue to work, but new members won't be recognized until a successful refresh
+
+**Customizing the group:**
+
+Set `slack_authorized_usergroup` in your `config.yaml` or via the `SLACK_AUTHORIZED_USERGROUP` environment variable:
+
+```yaml
+# config.yaml
+slack_authorized_usergroup: my-custom-group
+```
+
+```bash
+# or via environment variable
+export SLACK_AUTHORIZED_USERGROUP=my-custom-group
+```
+
+If omitted, it defaults to `sage-all`.
 
 ### Atlassian Rovo (Confluence/Jira)
 
@@ -179,14 +218,15 @@ refactor(component): code restructuring
 Configuration is loaded from a YAML/JSON file with environment variable overrides. Env vars always take precedence
 over file values.
 
-| Config key                       | Environment variable           | Description                     |
-|----------------------------------|--------------------------------|---------------------------------|
-| `rovo_mcp_server_url`            | `ROVO_MCP_SERVER_URL`          | Atlassian Rovo MCP endpoint     |
-| `atlassian_cloud_id`             | `ATLASSIAN_CLOUD_ID`           | Atlassian Cloud instance ID     |
-| `atlassian_service_user`         | `ATLASSIAN_SERVICE_USER`       | Atlassian service account email |
-| `bedrock_agent_id`               | `BEDROCK_AGENT_ID`             | Amazon Bedrock Agent ID         |
-| `bedrock_agent_alias_id`         | `BEDROCK_AGENT_ALIAS_ID`       | Amazon Bedrock Agent Alias ID   |
-| `slack_agent_router_secret_id`   | `SLACK_AGENT_ROUTER_SECRET_ID` | Secrets Manager secret name/ARN |
+| Config key                       | Environment variable           | Description                              |
+|----------------------------------|--------------------------------|------------------------------------------|
+| `rovo_mcp_server_url`            | `ROVO_MCP_SERVER_URL`          | Atlassian Rovo MCP endpoint              |
+| `atlassian_cloud_id`             | `ATLASSIAN_CLOUD_ID`           | Atlassian Cloud instance ID              |
+| `atlassian_service_user`         | `ATLASSIAN_SERVICE_USER`       | Atlassian service account email          |
+| `bedrock_agent_id`               | `BEDROCK_AGENT_ID`             | Amazon Bedrock Agent ID                  |
+| `bedrock_agent_alias_id`         | `BEDROCK_AGENT_ALIAS_ID`       | Amazon Bedrock Agent Alias ID            |
+| `slack_agent_router_secret_id`   | `SLACK_AGENT_ROUTER_SECRET_ID` | Secrets Manager secret name/ARN          |
+| `slack_authorized_usergroup`     | `SLACK_AUTHORIZED_USERGROUP`   | Slack User Group handle (default: sage-all) |
 
 The config file path is resolved in order:
 1. `SLACK_AGENT_ROUTER_CONFIG` environment variable
@@ -291,6 +331,7 @@ src/slack_agent_router/
 ├── main.py            # Entrypoint — config, secrets, wiring, startup
 ├── slack_app.py       # Slack Socket Mode listener
 ├── orchestrator.py    # Bedrock Agent conversation loop
+├── auth.py            # User Group authorization check
 ├── dedup.py           # Event deduplication (TTL cache)
 ├── backends/
 │   └── rovo.py        # Atlassian Rovo MCP client
