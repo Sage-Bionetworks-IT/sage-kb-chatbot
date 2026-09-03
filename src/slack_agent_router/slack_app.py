@@ -65,12 +65,14 @@ class SlackAgentApp:
         orchestrator: Any,
         rate_limiter: Any | None = None,
         auth_check: Callable[..., Any] | None = None,
+        deduplicator: Any | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._app_token = app_token
         self._orchestrator = orchestrator
         self._rate_limiter = rate_limiter
         self._auth_check = auth_check
+        self._deduplicator = deduplicator
         # Populated lazily by start()
         self.app: Any | None = None
         self.handler: Any | None = None
@@ -214,10 +216,52 @@ class SlackAgentApp:
         client: Any,
         bot_user_id: str,
     ) -> None:
-        """Parse a Slack event and run it through the shared pipeline."""
+        """Parse a Slack event and run it through the shared pipeline.
+
+        Deduplicates on the event identifier first (before auth and rate
+        limiting per Requirement 2.3); duplicates are skipped silently.
+        """
+        if self._is_duplicate(self._event_dedup_id(event)):
+            return
         parsed = self.parse_event(event, bot_user_id)
         thread_ts = parsed.thread_ts or parsed.event_ts
         await self._process_question(parsed, say=say, client=client, thread_ts=thread_ts)
+
+    # ------------------------------------------------------------------
+    # Deduplication
+    # ------------------------------------------------------------------
+
+    def _is_duplicate(self, dedup_id: str | None) -> bool:
+        """Return True when the identifier was already processed recently.
+
+        No-op (always False) when no deduplicator is configured.
+        """
+        if self._deduplicator is None:
+            return False
+        return self._deduplicator.is_duplicate(dedup_id)
+
+    @staticmethod
+    def _event_dedup_id(event: dict[str, Any]) -> str:
+        """Derive a stable deduplication key for an event.
+
+        Prefers Slack's ``event_id``/``client_msg_id`` when present, and
+        falls back to a ``channel:event_ts`` composite so redelivered
+        events without an ID are still caught.
+
+        Returns an empty string when neither a native ID nor a reliable
+        composite can be formed—callers (and the deduplicator) treat
+        empty strings as "not dedupable" and allow the event through.
+        """
+        if event.get("event_id"):
+            return event["event_id"]
+        if event.get("client_msg_id"):
+            return event["client_msg_id"]
+
+        channel = event.get("channel", "")
+        ts = event.get("event_ts") or event.get("ts") or ""
+        if channel and ts:
+            return f"{channel}:{ts}"
+        return ""
 
     async def _dispatch_and_format(self, parsed: ParsedQuestion) -> str:
         """Call the orchestrator and return a formatted Slack mrkdwn string.
@@ -341,9 +385,14 @@ class SlackAgentApp:
     async def _handle_slash_command(self, ack: Any, command: dict[str, Any], say: Any, client: Any) -> None:
         """Handle /sage-ask slash command.
 
-        Acknowledges within 3 seconds, then processes via the shared pipeline.
+        Acknowledges within 3 seconds, then processes via the shared
+        pipeline. Slack may retry the command if the ack is slow, so we
+        deduplicate on ``trigger_id`` (after ack) and skip duplicates
+        silently.
         """
         await ack()
+        if self._is_duplicate(command.get("trigger_id")):
+            return
         parsed = self.parse_command(command)
         await self._process_question(parsed, say=say, client=client)
 
