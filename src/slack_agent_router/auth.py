@@ -1,9 +1,18 @@
 """Authorization check via Slack User Group membership.
 
-Checks whether a user belongs to a configured Slack User Group
-(e.g. "sage-all") by calling the Slack ``usergroups.users.list`` API
-and caching the membership set with a short TTL to avoid hammering
-the API on every incoming event.
+Fail-closed authorization: by default **no one** is allowed. Access is
+granted only when either:
+
+* the configured group list contains the wildcard ``"*"`` (open to every
+  workspace user), or
+* the user is a member of one of the configured User Groups.
+
+With no configuration the bot denies everyone, so a missing or forgotten
+setting fails safe rather than exposing internal content.
+
+Membership for each configured group is resolved via the Slack
+``usergroups.list`` / ``usergroups.users.list`` APIs and cached with a
+short TTL to avoid hammering the API on every incoming event.
 
 Requirements: 2.1, 2.2, 2.3
 """
@@ -20,112 +29,268 @@ logger = logging.getLogger(__name__)
 # Default cache TTL in seconds — membership is refreshed at most this often.
 _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 
+# Shorter TTL used when one or more groups could not be resolved, so we
+# retry resolution soon rather than caching a bad result for the full TTL.
+_UNRESOLVED_RETRY_TTL_SECONDS = 30.0
+
+# Slack error codes that mean a group ID is durably invalid (deleted, renamed
+# away, or otherwise gone) rather than a transient API failure. On these we
+# drop the group from the union and re-resolve its handle next refresh instead
+# of keeping stale members.
+_DURABLE_GROUP_ERRORS = frozenset(
+    {
+        "no_such_subteam",
+        "subteam_not_found",
+        "invalid_usergroup",
+        "usergroup_not_found",
+    }
+)
+
+
+def _normalize_handles(handles: str | list[str] | None) -> list[str]:
+    """Normalize a handle argument to a de-duplicated list of non-empty handles.
+
+    Accepts a single handle string, a list of handles, or ``None``.
+    """
+    if handles is None:
+        return []
+    if isinstance(handles, str):
+        handles = [handles]
+    return list(dict.fromkeys(h.strip() for h in handles if h and h.strip()))
+
 
 class UserGroupAuthorizer:
-    """Checks user membership in a Slack User Group with a cached member list.
+    """Authorizes users against a list of Slack User Groups (fail-closed).
 
-    The authorizer resolves the User Group handle (e.g. ``sage-all``) to its
-    ID on first use, then periodically refreshes the member list from Slack.
+    Access is **denied by default**. A user is authorized only when:
+
+    * the configured group list contains the wildcard ``"*"`` — the bot is
+      explicitly open to everyone; or
+    * the user is a member of at least one configured group.
+
+    When the list is empty (and contains no ``"*"``), every user is denied.
+    This is the safe failure mode: a missing configuration locks the bot
+    down rather than exposing it.
+
+    Each configured group handle is resolved to its ID on first use, and the
+    combined member set is refreshed from Slack on a TTL.
 
     Parameters:
-        slack_client: An async Slack WebClient (``slack_sdk.web.async_client.AsyncWebClient``).
-        usergroup_handle: The handle of the Slack User Group to authorize against
-            (without the ``@`` prefix). Defaults to ``"sage-all"``.
+        slack_client: An async Slack WebClient
+            (``slack_sdk.web.async_client.AsyncWebClient``).
+        include_handles: Handles (without ``@``) of groups whose members are
+            allowed, or the single wildcard ``"*"`` to allow everyone.
+            Accepts a single handle string or a list.
         cache_ttl_seconds: How long to cache the member list before refreshing.
+        usergroup_handle: Deprecated single-handle alias for
+            ``include_handles``, kept for backward compatibility.
     """
+
+    #: Wildcard handle that grants access to every workspace user.
+    WILDCARD = "*"
 
     def __init__(
         self,
         slack_client: Any,
-        usergroup_handle: str = "sage-all",
+        include_handles: str | list[str] | None = None,
         cache_ttl_seconds: float = _DEFAULT_CACHE_TTL_SECONDS,
+        *,
+        usergroup_handle: str | None = None,
     ) -> None:
         self._client = slack_client
-        self._usergroup_handle = usergroup_handle
+
+        include_source = include_handles if include_handles is not None else usergroup_handle
+        self._include_handles = _normalize_handles(include_source)
+        self._allow_all = self.WILDCARD in self._include_handles
+
         self._cache_ttl = cache_ttl_seconds
 
-        # Resolved lazily on first check.
-        self._usergroup_id: str | None = None
+        # Resolved lazily on first check: handle → ID. Missing keys mean the
+        # handle has not been resolved yet or could not be found.
+        self._usergroup_ids: dict[str, str] = {}
 
-        # Cached member set and its expiry timestamp.
-        self._members: set[str] = set()
+        # Cached union member set and its expiry timestamp.
+        self._include_members: set[str] = set()
         self._cache_expires_at: float = 0.0
 
         # Serializes concurrent refresh attempts.
         self._refresh_lock = asyncio.Lock()
 
+    @property
+    def allow_all(self) -> bool:
+        """Whether the bot is explicitly open to all users (wildcard configured)."""
+        return self._allow_all
+
     async def is_authorized(self, user_id: str) -> bool:
-        """Return True if *user_id* is a member of the authorized User Group.
+        """Return True if *user_id* is allowed to use the bot.
+
+        Authorized when the group list contains the ``"*"`` wildcard, or the
+        user is a member of a configured group. Denied otherwise (including
+        when nothing is configured).
 
         Transparently refreshes the cached member list when the TTL expires.
-        On API errors the stale cache is used (fail-open for existing members,
-        fail-closed for unknown users when the cache is empty).
+        On API errors the stale cache is used.
         """
+        # Wildcard → allow everyone, no API calls needed.
+        if self._allow_all:
+            return True
+
+        # Fail closed: with no groups configured, deny everyone.
+        if not self._include_handles:
+            return False
+
         now = time.monotonic()
         if now >= self._cache_expires_at:
             await self._refresh_members()
 
-        return user_id in self._members
+        return user_id in self._include_members
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     async def _refresh_members(self) -> None:
-        """Refresh the cached member list from the Slack API.
+        """Refresh the cached include member set from the Slack API.
 
         Uses a lock so that concurrent callers don't all hit the API at
         once after TTL expiry.
+
+        Failure handling distinguishes two cases:
+
+        * **Durable** — a handle that resolves cleanly but matches no group
+          (deleted/typo). It contributes no members; the fresh union is
+          committed so the group drops out immediately (fail-safe).
+        * **Transient** — a Slack API error while listing or fetching. The
+          previously cached union is retained (stale-cache fallback) and the
+          retry TTL is shortened so we recover quickly.
         """
         async with self._refresh_lock:
-            # Double-check after acquiring the lock — another coroutine
-            # may have already refreshed while we were waiting.
+            # Double-check after acquiring the lock — another coroutine may
+            # have already refreshed while we were waiting.
             now = time.monotonic()
             if now < self._cache_expires_at:
                 return
 
+            had_transient_error = False
             try:
-                if self._usergroup_id is None:
-                    self._usergroup_id = await self._resolve_usergroup_id()
+                include_members, had_transient_error = await self._collect_members(self._include_handles)
 
-                if self._usergroup_id is None:
-                    logger.warning(
-                        "Could not resolve User Group '%s' — denying all users",
-                        self._usergroup_handle,
-                    )
-                    self._members = set()
-                    # Set a short TTL so we retry soon rather than permanently blocking.
-                    self._cache_expires_at = now + min(self._cache_ttl, 30.0)
-                    return
-
-                response = await self._client.usergroups_users_list(usergroup=self._usergroup_id)
-                if response.get("ok"):
-                    self._members = set(response.get("users", []))
-                    logger.info(
-                        "Refreshed User Group '%s' membership: %d members",
-                        self._usergroup_handle,
-                        len(self._members),
-                    )
-                else:
-                    logger.warning(
-                        "Slack API error refreshing User Group '%s': %s",
-                        self._usergroup_handle,
-                        response.get("error", "unknown"),
-                    )
+                # Commit the freshly computed union unless a *transient* error
+                # occurred. Unresolvable / deleted groups simply contribute no
+                # members and drop out of the union immediately (fail-safe,
+                # per the documented "unresolved group contributes no members").
+                # A transient Slack API error keeps the previous union to avoid
+                # flapping on a blip.
+                if not had_transient_error:
+                    self._include_members = include_members
             except Exception:
-                logger.exception(
-                    "Failed to refresh User Group '%s' membership — using stale cache",
-                    self._usergroup_handle,
-                )
+                logger.exception("Failed to refresh User Group membership — using stale cache")
+                had_transient_error = True
 
-            # Always bump the expiry so we don't retry on every request.
-            self._cache_expires_at = time.monotonic() + self._cache_ttl
+            # Retry sooner when something failed transiently; otherwise cache
+            # for the full TTL. (A durable unresolvable handle is not a reason
+            # to keep retrying quickly — the union already reflects it.)
+            ttl = min(self._cache_ttl, _UNRESOLVED_RETRY_TTL_SECONDS) if had_transient_error else self._cache_ttl
+            self._cache_expires_at = time.monotonic() + ttl
 
-    async def _resolve_usergroup_id(self) -> str | None:
-        """Resolve the User Group handle to its Slack ID.
+    async def _collect_members(self, handles: list[str]) -> tuple[set[str], bool]:
+        """Return the union of members across *handles* and a transient-error flag.
 
-        Calls ``usergroups.list`` and finds the group matching the
-        configured handle.
+        The union includes every group that resolved and whose members were
+        fetched successfully. Groups whose handle does not exist in the
+        workspace are simply omitted (not an error — they contribute nothing).
+
+        The boolean is True only when a *transient* failure occurred — a
+        Slack API error while resolving a handle or fetching a resolved
+        group's members. Callers use it to decide whether to keep the
+        previously cached union rather than committing a partial one.
+        """
+        members: set[str] = set()
+        if not handles:
+            return members, False
+
+        had_transient_error = False
+        for handle in handles:
+            group_id = self._usergroup_ids.get(handle)
+            if group_id is None:
+                group_id, resolve_error = await self._resolve_usergroup_id(handle)
+                if group_id is not None:
+                    self._usergroup_ids[handle] = group_id
+                elif resolve_error:
+                    # API failure while resolving → transient; don't treat the
+                    # group as durably absent.
+                    had_transient_error = True
+                    continue
+                else:
+                    # Resolved cleanly but no such handle → durable. The group
+                    # contributes no members; keep going.
+                    logger.warning("User Group '%s' not found — contributing no members", handle)
+                    continue
+
+            group_members, fetch_error = await self._fetch_group_members(handle, group_id)
+            if group_members is None:
+                if fetch_error:
+                    # Group exists but couldn't be read right now → transient.
+                    had_transient_error = True
+                else:
+                    # Cached ID is durably invalid (deleted/renamed). Evict it
+                    # so the next refresh re-resolves the handle, and drop the
+                    # group from this union rather than keeping stale members.
+                    self._usergroup_ids.pop(handle, None)
+                continue
+            members |= group_members
+
+        return members, had_transient_error
+
+    async def _fetch_group_members(self, handle: str, group_id: str) -> tuple[set[str] | None, bool]:
+        """Fetch the member set for a resolved group.
+
+        Returns ``(members, had_transient_error)``:
+
+        * ``(set, False)``  — fetched successfully.
+        * ``(None, False)`` — the group ID is durably invalid (deleted or
+          renamed away — see ``_DURABLE_GROUP_ERRORS``). The caller should
+          drop the group from the union and re-resolve its handle.
+        * ``(None, True)``  — a transient Slack API error; keep stale data.
+        """
+        try:
+            response = await self._client.usergroups_users_list(usergroup=group_id)
+        except Exception:
+            logger.exception("Failed to fetch members for User Group '%s'", handle)
+            return None, True
+
+        if response.get("ok"):
+            members = set(response.get("users", []))
+            logger.info("Refreshed User Group '%s' membership: %d members", handle, len(members))
+            return members, False
+
+        error = response.get("error", "unknown")
+        if error in _DURABLE_GROUP_ERRORS:
+            logger.warning(
+                "User Group '%s' (id %s) is no longer valid (%s) — dropping from the authorized set",
+                handle,
+                group_id,
+                error,
+            )
+            return None, False
+
+        logger.warning("Slack API error refreshing User Group '%s': %s", handle, error)
+        return None, True
+
+    async def _resolve_usergroup_id(self, handle: str) -> tuple[str | None, bool]:
+        """Resolve a User Group handle to its Slack ID.
+
+        Calls ``usergroups.list`` and finds the group matching *handle*.
+
+        Returns ``(group_id, had_transient_error)``:
+
+        * ``(id, False)``   — resolved successfully.
+        * ``(None, True)``  — a Slack API error (``ok:false`` or an
+          exception) prevented resolution; the caller should treat this as
+          transient and keep any stale data.
+        * ``(None, False)`` — the API listed groups fine but no handle
+          matched; the group is durably absent (deleted/typo) and should
+          contribute no members.
         """
         try:
             response = await self._client.usergroups_list()
@@ -134,22 +299,15 @@ class UserGroupAuthorizer:
                     "Slack API error listing User Groups: %s",
                     response.get("error", "unknown"),
                 )
-                return None
+                return None, True
 
             for group in response.get("usergroups", []):
-                if group.get("handle") == self._usergroup_handle:
-                    logger.info(
-                        "Resolved User Group '%s' → ID '%s'",
-                        self._usergroup_handle,
-                        group["id"],
-                    )
-                    return group["id"]
+                if group.get("handle") == handle:
+                    logger.info("Resolved User Group '%s' → ID '%s'", handle, group["id"])
+                    return group["id"], False
 
-            logger.warning(
-                "User Group with handle '%s' not found in workspace",
-                self._usergroup_handle,
-            )
-            return None
+            logger.warning("User Group with handle '%s' not found in workspace", handle)
+            return None, False
         except Exception:
-            logger.exception("Failed to resolve User Group '%s'", self._usergroup_handle)
-            return None
+            logger.exception("Failed to resolve User Group '%s'", handle)
+            return None, True

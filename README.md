@@ -18,7 +18,7 @@ Key components:
 - **SlackAgentApp** — Slack Socket Mode listener, handles messages and mentions
 - **BedrockAgentOrchestrator** — Manages the Bedrock Agent conversation loop with timeout and iteration guards
 - **RovoMCPBackend** — Calls Atlassian Rovo MCP to search Confluence pages and Jira issues
-- **UserGroupAuthorizer** — Checks Slack User Group membership (sage-all) with a cached member list
+- **UserGroupAuthorizer** — Checks Slack User Group membership against the configured authorized groups, with a cached member list
 - **RateLimiter** — Per-user rate limiting
 - **AuditLogger** — Structured logging of all interactions
 
@@ -56,7 +56,9 @@ The response is posted in the channel where you ran the command.
 
 ### Who can use it
 
-The bot is restricted to members of the **sage-all** Slack User Group. If you're not in that group, the bot will respond with an ephemeral message saying it's only available to Sage staff. Contact your workspace admin to be added to the group.
+Access is restricted by default: only members of the Slack User Groups an admin authorizes may use the bot. If you're not authorized, the bot replies with an ephemeral message saying it's only available to Sage staff — contact your workspace admin to be added to an authorized group.
+
+Admins configure the authorized groups via `slack_authorized_usergroups`, or open the bot to everyone by setting it to `["*"]` — see [CONTRIBUTING.md](CONTRIBUTING.md#authorization-user-groups).
 
 ### What to expect while it works
 

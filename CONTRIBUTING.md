@@ -101,43 +101,73 @@ This project integrates with several external services. Each needs to be configu
 6. Add the bot to channels where it should respond
 7. Add the **OAuth scope** `usergroups:read` to the bot token — this is required for the authorization check
 
-### Authorization (User Group)
+### Authorization (User Groups)
 
-The bot restricts access to members of a Slack User Group. By default it checks the **sage-all** group.
+Authorization is **fail-closed**: by default, with nothing configured, the bot **denies every user**. This is deliberate — a missing or forgotten config locks the bot down rather than exposing internal Confluence/Jira content to the whole workspace.
+
+**Access rule:**
+
+```
+allowed = ("*" in slack_authorized_usergroups)
+          OR (user is a member of a configured authorized group)
+```
+
+- `slack_authorized_usergroups` — only members of these groups may use the bot. When empty, everyone is denied.
+- The wildcard `"*"` — when the list contains `"*"`, the bot is open to **all** workspace users and group membership is not checked. It's the single, explicit way to run the bot open; set it deliberately.
+
+The auth check is always wired. `main.py` logs a warning when the list contains `"*"` (open to everyone) and a distinct warning when nothing is configured (denying everyone), so both edge states are visible at startup.
 
 **How it works:**
 
-1. On first request (or after cache expiry), the bot calls `usergroups.list` to resolve the group handle → ID
-2. It calls `usergroups.users.list` to fetch the member list
-3. The member list is cached for 5 minutes to avoid excessive API calls
-4. Each incoming event is checked against the cached member set before any processing
+1. On first request (or after cache expiry), the bot calls `usergroups.list` to resolve each configured group handle → ID
+2. It calls `usergroups.users.list` per group and unions the members into the authorized set
+3. The member set is cached for 5 minutes to avoid excessive API calls
+4. Each incoming event is checked against the cached set before any processing (short-circuited when the wildcard `"*"` is configured — no API calls at all)
 
 **Required Slack permissions:**
 
 | OAuth Scope | Purpose |
 |-------------|---------|
-| `usergroups:read` | List User Groups and resolve the group handle to its ID |
+| `usergroups:read` | List User Groups and resolve group handles to their IDs |
 
 **Behavior on errors:**
 
-- If the User Group can't be resolved (e.g. it doesn't exist), all users are denied until the next refresh attempt (30s retry)
-- If the API fails after the group was previously resolved, the stale cache is used — existing members continue to work, but new members won't be recognized until a successful refresh
+Failures are split into **durable** (the group is genuinely gone) and **transient** (a Slack API blip), and handled differently:
 
-**Customizing the group:**
+- **Durable — handle not found.** If `usergroups.list` succeeds but no group matches the configured handle (typo or deleted group), that group contributes no members and is simply omitted from the authorized union. Other configured groups are unaffected — one bad handle never denies everyone. Because the group is genuinely gone, the cache uses the **full TTL** (no point retrying rapidly).
+- **Durable — cached group deleted/renamed.** If a previously resolved group ID later returns a "group gone" error (`no_such_subteam`, `subteam_not_found`, `invalid_usergroup`, `usergroup_not_found`), its members are **dropped from the union** (not kept stale), the cached ID is evicted, and the handle is re-resolved on the next refresh. This closes the fail-open window where deleted-group members could stay authorized.
+- **Transient — Slack API error.** If listing or fetching fails transiently (rate limits, `5xx`, timeouts, exceptions), the **previously cached union is retained** so a blip doesn't wipe a good member set, and the retry TTL is shortened to 30s so we recover quickly.
 
-Set `slack_authorized_usergroup` in your `config.yaml` or via the `SLACK_AUTHORIZED_USERGROUP` environment variable:
+Net effect (fail-safe): genuinely-missing groups drop out; only transient errors preserve stale membership, and only briefly.
+
+**Configuring access:**
+
+Use group **handles** (the `@`-mention slug), without the `@`. The list may be a YAML list in `config.yaml` or a comma-separated string via `SLACK_AUTHORIZED_USERGROUPS`. The env var replaces the file value wholesale (it does not merge) — see [Configuration](#configuration) for the full source-precedence rules.
 
 ```yaml
-# config.yaml
-slack_authorized_usergroup: my-custom-group
+# config.yaml — restrict to IT and Security
+slack_authorized_usergroups:
+  - it-team
+  - sec-team
 ```
 
 ```bash
-# or via environment variable
-export SLACK_AUTHORIZED_USERGROUP=my-custom-group
+# or via environment variable (comma-separated)
+export SLACK_AUTHORIZED_USERGROUPS=it-team,sec-team
 ```
 
-If omitted, it defaults to `sage-all`.
+To intentionally open the bot to everyone, use the wildcard:
+
+```yaml
+# config.yaml
+slack_authorized_usergroups: ["*"]
+```
+
+```bash
+export SLACK_AUTHORIZED_USERGROUPS=*
+```
+
+Leave the list empty/unset to deny all users (the safe default).
 
 ### Atlassian Rovo (Confluence/Jira)
 
@@ -236,8 +266,7 @@ refactor(component): code restructuring
 
 ## Configuration
 
-Configuration is loaded from a YAML/JSON file with environment variable overrides. Env vars always take precedence
-over file values.
+Configuration is loaded from a YAML/JSON file with environment variable overrides.
 
 | Config key                       | Environment variable           | Description                              |
 |----------------------------------|--------------------------------|------------------------------------------|
@@ -247,7 +276,18 @@ over file values.
 | `bedrock_agent_id`               | `BEDROCK_AGENT_ID`             | Amazon Bedrock Agent ID                  |
 | `bedrock_agent_alias_id`         | `BEDROCK_AGENT_ALIAS_ID`       | Amazon Bedrock Agent Alias ID            |
 | `slack_agent_router_secret_id`   | `SLACK_AGENT_ROUTER_SECRET_ID` | Secrets Manager secret name/ARN          |
-| `slack_authorized_usergroup`     | `SLACK_AUTHORIZED_USERGROUP`   | Slack User Group handle (default: sage-all) |
+| `slack_authorized_usergroups`    | `SLACK_AUTHORIZED_USERGROUPS`  | Authorized Slack User Group handles, comma-separated in the env var; `*` = allow all; empty = deny all |
+
+**Precedence (per setting):**
+
+1. **Environment variable wins** over the config file when it is set to a non-empty value.
+2. **Config file** value is used when the env var is unset or empty.
+3. **Built-in default** applies when neither is provided (for `slack_authorized_usergroups`, the default is empty → deny all).
+
+Two things to note for the list setting `slack_authorized_usergroups`:
+
+- The override is **whole-value replacement, not a merge** — if `SLACK_AUTHORIZED_USERGROUPS` is set, the file's list is ignored entirely (and vice versa). You cannot define some groups in the file and add more via the env var.
+- An **empty env var does not override** — `SLACK_AUTHORIZED_USERGROUPS=` (blank) is treated as unset, so the config-file value still applies. To actually clear the list from the environment, unset the variable rather than setting it blank.
 
 The config file path is resolved in order:
 1. `SLACK_AGENT_ROUTER_CONFIG` environment variable

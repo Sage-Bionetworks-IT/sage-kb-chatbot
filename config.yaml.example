@@ -14,6 +14,22 @@ slack_agent_router_secret_id: slack-agent-router/dev
 export BEDROCK_AGENT_ID=your-agent-id
 export BEDROCK_AGENT_ALIAS_ID=your-alias-id
 #
-# Slack User Group handle for authorization (without @).
-# Only members of this group can use the bot.
-slack_authorized_usergroup: your-slack-group
+# Authorization by Slack User Group (handles without the @ prefix).
+#
+# Fail-closed: by default (nothing configured) the bot DENIES everyone.
+# A user is allowed only when:
+#   - slack_authorized_usergroups contains "*" (bot open to everyone), OR
+#   - the user is a member of one of the listed groups.
+#
+# slack_authorized_usergroups: only members of these groups may use the
+#   bot. May be a YAML list (below) or, via the environment variable, a
+#   comma-separated string: SLACK_AUTHORIZED_USERGROUPS=it-team,sec-team
+#
+# slack_authorized_usergroups:
+#   - it-team
+#   - sec-team
+#
+# To open the bot to ALL workspace users, set the single wildcard "*":
+#   slack_authorized_usergroups: ["*"]
+#   (env var: SLACK_AUTHORIZED_USERGROUPS=*)
+# Leave the list empty/omitted to keep access denied by default.
