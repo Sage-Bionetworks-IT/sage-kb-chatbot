@@ -273,12 +273,34 @@ class TestFailureHandling:
         # Never attempts to list members for an unresolved group.
         client.usergroups_users_list.assert_not_awaited()
 
-    async def test_unresolvable_group_uses_short_retry_ttl(self) -> None:
-        """When a group can't be resolved, the retry TTL is capped at 30s."""
+    async def test_not_found_group_uses_full_ttl(self) -> None:
+        """A durably missing handle (listed fine, no match) uses the full TTL.
+
+        A not-found handle is not a transient condition — the union already
+        reflects it (the group contributes nothing), so there's no reason to
+        re-list rapidly.
+        """
         clock, advance = _controllable_clock()
         client = AsyncMock()
         client.usergroups_list.return_value = {"ok": True, "usergroups": []}
-        # cache_ttl is large, but the unresolved path caps retry at min(ttl, 30).
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
+
+        with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
+            await authorizer.is_authorized("U1")
+            # Just past the short (30s) retry window: still cached under the full TTL.
+            advance(31)
+            await authorizer.is_authorized("U1")
+            assert client.usergroups_list.await_count == 1
+            # Past the full TTL: refreshes.
+            advance(300)
+            await authorizer.is_authorized("U1")
+            assert client.usergroups_list.await_count == 2
+
+    async def test_transient_list_error_uses_short_retry_ttl(self) -> None:
+        """A transient usergroups.list API error caps the retry TTL at 30s."""
+        clock, advance = _controllable_clock()
+        client = AsyncMock()
+        client.usergroups_list.return_value = {"ok": False, "error": "ratelimited"}
         authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
 
         with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
@@ -334,3 +356,65 @@ class TestFailureHandling:
         authorizer = UserGroupAuthorizer(client, include_handles=["it-team"])
 
         assert await authorizer.is_authorized("U1") is False
+
+    async def test_one_missing_group_does_not_deny_resolved_group(self) -> None:
+        """A not-found handle drops out; members of the resolvable group still pass.
+
+        Regression: previously a single unresolvable handle set include_ok
+        False and left the union uncommitted, denying everyone on a cold cache.
+        """
+        client = AsyncMock()
+        # good-team resolves to S1 with member U1; typo-team is not found.
+        client.usergroups_list.return_value = {
+            "ok": True,
+            "usergroups": [{"id": "S1", "handle": "good-team"}],
+        }
+        client.usergroups_users_list.return_value = {"ok": True, "users": ["U1"]}
+        authorizer = UserGroupAuthorizer(client, include_handles=["good-team", "typo-team"])
+
+        assert await authorizer.is_authorized("U1") is True  # resolved group works
+        assert await authorizer.is_authorized("U2") is False  # not a member
+
+    async def test_not_found_group_drops_from_union_when_paired(self) -> None:
+        """A not-found handle contributes nothing; a paired resolvable group still
+        authorizes its members and its refresh reflects membership changes.
+
+        Regression: a single unresolvable handle no longer blocks committing
+        the union built from the groups that did resolve.
+        """
+        clock, advance = _controllable_clock()
+        client = AsyncMock()
+        client.usergroups_list.return_value = {
+            "ok": True,
+            "usergroups": [{"id": "S1", "handle": "good-team"}],
+        }
+        client.usergroups_users_list.return_value = {"ok": True, "users": ["U1"]}
+        authorizer = UserGroupAuthorizer(client, include_handles=["good-team", "missing-team"], cache_ttl_seconds=300)
+
+        with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
+            assert await authorizer.is_authorized("U1") is True
+            # good-team's membership changes on the next refresh — the union is
+            # recomputed and committed (the missing handle doesn't block it).
+            client.usergroups_users_list.return_value = {"ok": True, "users": ["U2"]}
+            advance(301)
+            assert await authorizer.is_authorized("U1") is False
+            assert await authorizer.is_authorized("U2") is True
+
+    async def test_transient_fetch_error_keeps_stale_union(self) -> None:
+        """A transient members-fetch error retains the previously cached union."""
+        clock, advance = _controllable_clock()
+        client = AsyncMock()
+        client.usergroups_list.return_value = {
+            "ok": True,
+            "usergroups": [{"id": "S1", "handle": "it-team"}],
+        }
+        client.usergroups_users_list.return_value = {"ok": True, "users": ["U1"]}
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
+
+        with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
+            assert await authorizer.is_authorized("U1") is True
+            # The group still resolves, but the member fetch now transiently fails.
+            client.usergroups_users_list.return_value = {"ok": False, "error": "ratelimited"}
+            advance(301)
+            # Stale union retained → U1 still authorized despite the blip.
+            assert await authorizer.is_authorized("U1") is True

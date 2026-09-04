@@ -140,8 +140,16 @@ class UserGroupAuthorizer:
         """Refresh the cached include member set from the Slack API.
 
         Uses a lock so that concurrent callers don't all hit the API at
-        once after TTL expiry. On any failure the previously cached set is
-        retained (stale-cache fallback), and the retry TTL is shortened.
+        once after TTL expiry.
+
+        Failure handling distinguishes two cases:
+
+        * **Durable** — a handle that resolves cleanly but matches no group
+          (deleted/typo). It contributes no members; the fresh union is
+          committed so the group drops out immediately (fail-safe).
+        * **Transient** — a Slack API error while listing or fetching. The
+          previously cached union is retained (stale-cache fallback) and the
+          retry TTL is shortened so we recover quickly.
         """
         async with self._refresh_lock:
             # Double-check after acquiring the lock — another coroutine may
@@ -150,54 +158,70 @@ class UserGroupAuthorizer:
             if now < self._cache_expires_at:
                 return
 
-            all_resolved = True
+            had_transient_error = False
             try:
-                include_members, include_ok = await self._collect_members(self._include_handles)
-                all_resolved = include_ok
+                include_members, had_transient_error = await self._collect_members(self._include_handles)
 
-                # Only replace the set on a successful refresh so a transient
-                # failure doesn't wipe a previously good member set.
-                if include_ok:
+                # Commit the freshly computed union unless a *transient* error
+                # occurred. Unresolvable / deleted groups simply contribute no
+                # members and drop out of the union immediately (fail-safe,
+                # per the documented "unresolved group contributes no members").
+                # A transient Slack API error keeps the previous union to avoid
+                # flapping on a blip.
+                if not had_transient_error:
                     self._include_members = include_members
             except Exception:
                 logger.exception("Failed to refresh User Group membership — using stale cache")
-                all_resolved = False
+                had_transient_error = True
 
-            # Retry sooner when something failed to resolve; otherwise cache
-            # for the full TTL.
-            ttl = self._cache_ttl if all_resolved else min(self._cache_ttl, _UNRESOLVED_RETRY_TTL_SECONDS)
+            # Retry sooner when something failed transiently; otherwise cache
+            # for the full TTL. (A durable unresolvable handle is not a reason
+            # to keep retrying quickly — the union already reflects it.)
+            ttl = min(self._cache_ttl, _UNRESOLVED_RETRY_TTL_SECONDS) if had_transient_error else self._cache_ttl
             self._cache_expires_at = time.monotonic() + ttl
 
     async def _collect_members(self, handles: list[str]) -> tuple[set[str], bool]:
-        """Return the union of members across *handles* and whether all resolved.
+        """Return the union of members across *handles* and a transient-error flag.
 
-        The boolean is True only if every handle resolved to an ID and its
-        member list was fetched successfully.
+        The union includes every group that resolved and whose members were
+        fetched successfully. Groups whose handle does not exist in the
+        workspace are simply omitted (not an error — they contribute nothing).
+
+        The boolean is True only when a *transient* failure occurred — a
+        Slack API error while resolving a handle or fetching a resolved
+        group's members. Callers use it to decide whether to keep the
+        previously cached union rather than committing a partial one.
         """
         members: set[str] = set()
         if not handles:
-            return members, True
+            return members, False
 
-        all_ok = True
+        had_transient_error = False
         for handle in handles:
             group_id = self._usergroup_ids.get(handle)
             if group_id is None:
-                group_id = await self._resolve_usergroup_id(handle)
+                group_id, resolve_error = await self._resolve_usergroup_id(handle)
                 if group_id is not None:
                     self._usergroup_ids[handle] = group_id
-
-            if group_id is None:
-                logger.warning("Could not resolve User Group '%s'", handle)
-                all_ok = False
-                continue
+                elif resolve_error:
+                    # API failure while resolving → transient; don't treat the
+                    # group as durably absent.
+                    had_transient_error = True
+                    continue
+                else:
+                    # Resolved cleanly but no such handle → durable. The group
+                    # contributes no members; keep going.
+                    logger.warning("User Group '%s' not found — contributing no members", handle)
+                    continue
 
             group_members = await self._fetch_group_members(handle, group_id)
             if group_members is None:
-                all_ok = False
+                # We know the group exists but couldn't read it right now.
+                had_transient_error = True
                 continue
             members |= group_members
 
-        return members, all_ok
+        return members, had_transient_error
 
     async def _fetch_group_members(self, handle: str, group_id: str) -> set[str] | None:
         """Fetch the member set for a resolved group, or None on API error."""
@@ -213,10 +237,20 @@ class UserGroupAuthorizer:
         )
         return None
 
-    async def _resolve_usergroup_id(self, handle: str) -> str | None:
+    async def _resolve_usergroup_id(self, handle: str) -> tuple[str | None, bool]:
         """Resolve a User Group handle to its Slack ID.
 
         Calls ``usergroups.list`` and finds the group matching *handle*.
+
+        Returns ``(group_id, had_transient_error)``:
+
+        * ``(id, False)``   — resolved successfully.
+        * ``(None, True)``  — a Slack API error (``ok:false`` or an
+          exception) prevented resolution; the caller should treat this as
+          transient and keep any stale data.
+        * ``(None, False)`` — the API listed groups fine but no handle
+          matched; the group is durably absent (deleted/typo) and should
+          contribute no members.
         """
         try:
             response = await self._client.usergroups_list()
@@ -225,15 +259,15 @@ class UserGroupAuthorizer:
                     "Slack API error listing User Groups: %s",
                     response.get("error", "unknown"),
                 )
-                return None
+                return None, True
 
             for group in response.get("usergroups", []):
                 if group.get("handle") == handle:
                     logger.info("Resolved User Group '%s' → ID '%s'", handle, group["id"])
-                    return group["id"]
+                    return group["id"], False
 
             logger.warning("User Group with handle '%s' not found in workspace", handle)
-            return None
+            return None, False
         except Exception:
             logger.exception("Failed to resolve User Group '%s'", handle)
-            return None
+            return None, True
