@@ -33,6 +33,19 @@ _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 # retry resolution soon rather than caching a bad result for the full TTL.
 _UNRESOLVED_RETRY_TTL_SECONDS = 30.0
 
+# Slack error codes that mean a group ID is durably invalid (deleted, renamed
+# away, or otherwise gone) rather than a transient API failure. On these we
+# drop the group from the union and re-resolve its handle next refresh instead
+# of keeping stale members.
+_DURABLE_GROUP_ERRORS = frozenset(
+    {
+        "no_such_subteam",
+        "subteam_not_found",
+        "invalid_usergroup",
+        "usergroup_not_found",
+    }
+)
+
 
 def _normalize_handles(handles: str | list[str] | None) -> list[str]:
     """Normalize a handle argument to a de-duplicated list of non-empty handles.
@@ -214,28 +227,55 @@ class UserGroupAuthorizer:
                     logger.warning("User Group '%s' not found — contributing no members", handle)
                     continue
 
-            group_members = await self._fetch_group_members(handle, group_id)
+            group_members, fetch_error = await self._fetch_group_members(handle, group_id)
             if group_members is None:
-                # We know the group exists but couldn't read it right now.
-                had_transient_error = True
+                if fetch_error:
+                    # Group exists but couldn't be read right now → transient.
+                    had_transient_error = True
+                else:
+                    # Cached ID is durably invalid (deleted/renamed). Evict it
+                    # so the next refresh re-resolves the handle, and drop the
+                    # group from this union rather than keeping stale members.
+                    self._usergroup_ids.pop(handle, None)
                 continue
             members |= group_members
 
         return members, had_transient_error
 
-    async def _fetch_group_members(self, handle: str, group_id: str) -> set[str] | None:
-        """Fetch the member set for a resolved group, or None on API error."""
-        response = await self._client.usergroups_users_list(usergroup=group_id)
+    async def _fetch_group_members(self, handle: str, group_id: str) -> tuple[set[str] | None, bool]:
+        """Fetch the member set for a resolved group.
+
+        Returns ``(members, had_transient_error)``:
+
+        * ``(set, False)``  — fetched successfully.
+        * ``(None, False)`` — the group ID is durably invalid (deleted or
+          renamed away — see ``_DURABLE_GROUP_ERRORS``). The caller should
+          drop the group from the union and re-resolve its handle.
+        * ``(None, True)``  — a transient Slack API error; keep stale data.
+        """
+        try:
+            response = await self._client.usergroups_users_list(usergroup=group_id)
+        except Exception:
+            logger.exception("Failed to fetch members for User Group '%s'", handle)
+            return None, True
+
         if response.get("ok"):
             members = set(response.get("users", []))
             logger.info("Refreshed User Group '%s' membership: %d members", handle, len(members))
-            return members
-        logger.warning(
-            "Slack API error refreshing User Group '%s': %s",
-            handle,
-            response.get("error", "unknown"),
-        )
-        return None
+            return members, False
+
+        error = response.get("error", "unknown")
+        if error in _DURABLE_GROUP_ERRORS:
+            logger.warning(
+                "User Group '%s' (id %s) is no longer valid (%s) — dropping from the authorized set",
+                handle,
+                group_id,
+                error,
+            )
+            return None, False
+
+        logger.warning("Slack API error refreshing User Group '%s': %s", handle, error)
+        return None, True
 
     async def _resolve_usergroup_id(self, handle: str) -> tuple[str | None, bool]:
         """Resolve a User Group handle to its Slack ID.

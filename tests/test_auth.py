@@ -418,3 +418,34 @@ class TestFailureHandling:
             advance(301)
             # Stale union retained → U1 still authorized despite the blip.
             assert await authorizer.is_authorized("U1") is True
+
+    async def test_durable_fetch_error_drops_cached_group(self) -> None:
+        """A cached group ID that becomes durably invalid drops its members.
+
+        Regression: a deleted/renamed group returns a durable error (e.g.
+        no_such_subteam) on usergroups.users.list; its members must not be
+        kept stale, and the handle should be re-resolved next refresh.
+        """
+        clock, advance = _controllable_clock()
+        client = AsyncMock()
+        client.usergroups_list.return_value = {
+            "ok": True,
+            "usergroups": [{"id": "S1", "handle": "it-team"}],
+        }
+        client.usergroups_users_list.return_value = {"ok": True, "users": ["U1"]}
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team"], cache_ttl_seconds=300)
+
+        with patch("slack_agent_router.auth.time.monotonic", side_effect=clock):
+            assert await authorizer.is_authorized("U1") is True
+            # The cached group ID is now invalid (group deleted).
+            client.usergroups_users_list.return_value = {"ok": False, "error": "no_such_subteam"}
+            advance(301)
+            # U1 is dropped — not kept stale.
+            assert await authorizer.is_authorized("U1") is False
+            # The stale ID was evicted; a durable fetch error is not transient,
+            # so this refresh used the full TTL. The next refresh re-resolves
+            # the handle via usergroups.list.
+            client.usergroups_list.reset_mock()
+            advance(301)
+            await authorizer.is_authorized("U1")
+            assert client.usergroups_list.await_count == 1

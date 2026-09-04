@@ -132,8 +132,13 @@ The auth check is always wired. `main.py` logs a warning when the list contains 
 
 **Behavior on errors:**
 
-- If a group can't be resolved (e.g. it doesn't exist), that group contributes no members and the cache uses a short 30s retry TTL so resolution is retried soon. Consistent with fail-closed, an unresolved group simply means its members aren't authorized yet.
-- If the API fails after a group was previously resolved, the stale cache is retained — a transient failure won't wipe a good member set.
+Failures are split into **durable** (the group is genuinely gone) and **transient** (a Slack API blip), and handled differently:
+
+- **Durable — handle not found.** If `usergroups.list` succeeds but no group matches the configured handle (typo or deleted group), that group contributes no members and is simply omitted from the authorized union. Other configured groups are unaffected — one bad handle never denies everyone. Because the group is genuinely gone, the cache uses the **full TTL** (no point retrying rapidly).
+- **Durable — cached group deleted/renamed.** If a previously resolved group ID later returns a "group gone" error (`no_such_subteam`, `subteam_not_found`, `invalid_usergroup`, `usergroup_not_found`), its members are **dropped from the union** (not kept stale), the cached ID is evicted, and the handle is re-resolved on the next refresh. This closes the fail-open window where deleted-group members could stay authorized.
+- **Transient — Slack API error.** If listing or fetching fails transiently (rate limits, `5xx`, timeouts, exceptions), the **previously cached union is retained** so a blip doesn't wipe a good member set, and the retry TTL is shortened to 30s so we recover quickly.
+
+Net effect (fail-safe): genuinely-missing groups drop out; only transient errors preserve stale membership, and only briefly.
 
 **Configuring access:**
 
