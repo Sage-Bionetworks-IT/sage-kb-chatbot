@@ -40,7 +40,6 @@ _BEDROCK_AGENT_ID_ENV = "BEDROCK_AGENT_ID"
 _BEDROCK_AGENT_ALIAS_ID_ENV = "BEDROCK_AGENT_ALIAS_ID"
 _SLACK_AGENT_ROUTER_SECRET_ID_ENV = "SLACK_AGENT_ROUTER_SECRET_ID"  # pragma: allowlist secret
 _SLACK_AUTHORIZED_USERGROUPS_ENV = "SLACK_AUTHORIZED_USERGROUPS"
-_SLACK_EXCLUDED_USERGROUPS_ENV = "SLACK_EXCLUDED_USERGROUPS"
 
 # Maps AppConfig field name → environment variable name (string-valued fields).
 _ENV_MAP: dict[str, str] = {
@@ -54,11 +53,10 @@ _ENV_MAP: dict[str, str] = {
 
 # Maps AppConfig field name → environment variable name (list-valued fields).
 # In env vars these are comma-separated; in a config file they may be a YAML
-# list or a comma-separated string. Both default to an empty list, which
-# means "no authorization restriction" (allow all users).
+# list or a comma-separated string. Empty means no groups are authorized —
+# with allow_all off, that denies everyone (fail closed).
 _LIST_ENV_MAP: dict[str, str] = {
     "slack_authorized_usergroups": _SLACK_AUTHORIZED_USERGROUPS_ENV,
-    "slack_excluded_usergroups": _SLACK_EXCLUDED_USERGROUPS_ENV,
 }
 
 # String fields that have defaults and are not required in config/env.
@@ -75,13 +73,10 @@ class AppConfig:
     bedrock_agent_id: str
     bedrock_agent_alias_id: str
     slack_agent_router_secret_id: str
-    # Slack User Group handles (without @) whose members may use the bot.
-    # Empty means allow all users. A user must be in one of these groups
-    # (when non-empty) and not in slack_excluded_usergroups.
+    # Slack User Group handles (without @) whose members may use the bot, or
+    # the single wildcard "*" to open the bot to everyone. Authorization is
+    # fail-closed: if this is empty, every user is denied.
     slack_authorized_usergroups: tuple[str, ...] = ()
-    # Slack User Group handles (without @) whose members are always denied,
-    # overriding the include list. Empty means no exclusions.
-    slack_excluded_usergroups: tuple[str, ...] = ()
 
 
 def load_config(config_path: str | None = None) -> AppConfig:
@@ -107,9 +102,8 @@ def load_config(config_path: str | None = None) -> AppConfig:
     * ``BEDROCK_AGENT_ALIAS_ID`` — Amazon Bedrock Agent alias ID
     * ``SLACK_AGENT_ROUTER_SECRET_ID`` — Secrets Manager secret name or ARN
     * ``SLACK_AUTHORIZED_USERGROUPS``  — Comma-separated Slack User Group
-      handles whose members may use the bot. Empty means allow all users.
-    * ``SLACK_EXCLUDED_USERGROUPS``    — Comma-separated Slack User Group
-      handles whose members are always denied (overrides the include list).
+      handles whose members may use the bot, or ``*`` to open the bot to all
+      workspace users. Empty denies everyone (fail closed).
 
     Raises:
         RuntimeError: If any required config value is missing after
@@ -416,13 +410,15 @@ async def main() -> None:
     authorizer = UserGroupAuthorizer(
         slack_client=slack_web_client,
         include_handles=list(config.slack_authorized_usergroups),
-        exclude_handles=list(config.slack_excluded_usergroups),
     )
-    # When neither an include nor an exclude list is configured, the bot is
-    # open to all users — skip wiring the auth check entirely.
-    auth_check = authorizer.is_authorized if authorizer.enforces_authorization else None
-    if auth_check is None:
-        logger.warning("No Slack User Group authorization configured — the bot is open to all workspace users")
+    # Authorization is fail-closed: the auth check is always wired. The
+    # authorizer denies everyone unless the group list contains "*" or the
+    # user is in a configured group.
+    auth_check = authorizer.is_authorized
+    if authorizer.allow_all:
+        logger.warning('slack_authorized_usergroups contains "*" — the bot is open to ALL workspace users')
+    elif not config.slack_authorized_usergroups:
+        logger.warning("No authorized Slack User Groups configured — the bot will deny all users")
 
     # --- Slack app ---------------------------------------------------
     from slack_agent_router.slack_app import SlackAgentApp

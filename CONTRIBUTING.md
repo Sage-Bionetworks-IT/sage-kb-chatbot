@@ -103,26 +103,26 @@ This project integrates with several external services. Each needs to be configu
 
 ### Authorization (User Groups)
 
-Access is controlled by two optional Slack User Group lists: an **include** (allow) list and an **exclude** (deny) list. **By default both are empty, so the bot is open to all workspace users.**
+Authorization is **fail-closed**: by default, with nothing configured, the bot **denies every user**. This is deliberate — a missing or forgotten config locks the bot down rather than exposing internal Confluence/Jira content to the whole workspace.
 
 **Access rule:**
 
 ```
-allowed = (include empty OR user in an included group)
-          AND (user NOT in any excluded group)
+allowed = ("*" in slack_authorized_usergroups)
+          OR (user is a member of a configured authorized group)
 ```
 
-- `slack_authorized_usergroups` (include) — when non-empty, only members of these groups may use the bot; everyone else is denied.
-- `slack_excluded_usergroups` (exclude) — members of these groups are always denied, **even if they are also in an included group**. Exclude wins over include.
+- `slack_authorized_usergroups` — only members of these groups may use the bot. When empty, everyone is denied.
+- The wildcard `"*"` — when the list contains `"*"`, the bot is open to **all** workspace users and group membership is not checked. It's the single, explicit way to run the bot open; set it deliberately.
 
-When both lists are empty the authorizer is skipped entirely (`auth_check=None`), and `main.py` logs a warning that the bot is open to all users.
+The auth check is always wired. `main.py` logs a warning when the list contains `"*"` (open to everyone) and a distinct warning when nothing is configured (denying everyone), so both edge states are visible at startup.
 
 **How it works:**
 
 1. On first request (or after cache expiry), the bot calls `usergroups.list` to resolve each configured group handle → ID
-2. It calls `usergroups.users.list` per group and unions the members into an include set and an exclude set
-3. The member sets are cached for 5 minutes to avoid excessive API calls
-4. Each incoming event is checked against the cached sets (exclude first, then include) before any processing
+2. It calls `usergroups.users.list` per group and unions the members into the authorized set
+3. The member set is cached for 5 minutes to avoid excessive API calls
+4. Each incoming event is checked against the cached set before any processing (short-circuited when the wildcard `"*"` is configured — no API calls at all)
 
 **Required Slack permissions:**
 
@@ -132,29 +132,37 @@ When both lists are empty the authorizer is skipped entirely (`auth_check=None`)
 
 **Behavior on errors:**
 
-- If a group can't be resolved (e.g. it doesn't exist), that group contributes no members and the cache uses a short 30s retry TTL so resolution is retried soon. Note the fail-open implication: an unresolved **exclude** group means its members are not blocked until it resolves.
+- If a group can't be resolved (e.g. it doesn't exist), that group contributes no members and the cache uses a short 30s retry TTL so resolution is retried soon. Consistent with fail-closed, an unresolved group simply means its members aren't authorized yet.
 - If the API fails after a group was previously resolved, the stale cache is retained — a transient failure won't wipe a good member set.
 
-**Configuring the lists:**
+**Configuring access:**
 
-Each list may be a YAML list in `config.yaml`, or a comma-separated string via the matching environment variable (`SLACK_AUTHORIZED_USERGROUPS` / `SLACK_EXCLUDED_USERGROUPS`), which override the file. Use group **handles** (the `@`-mention slug), without the `@`.
+Use group **handles** (the `@`-mention slug), without the `@`. The list may be a YAML list in `config.yaml` or a comma-separated string via `SLACK_AUTHORIZED_USERGROUPS`. The env var replaces the file value wholesale (it does not merge) — see [Configuration](#configuration) for the full source-precedence rules.
 
 ```yaml
-# config.yaml — only IT and Security may use the bot, minus contractors
+# config.yaml — restrict to IT and Security
 slack_authorized_usergroups:
   - it-team
   - sec-team
-slack_excluded_usergroups:
-  - contractors
 ```
 
 ```bash
-# or via environment variables (comma-separated)
+# or via environment variable (comma-separated)
 export SLACK_AUTHORIZED_USERGROUPS=it-team,sec-team
-export SLACK_EXCLUDED_USERGROUPS=contractors
 ```
 
-Omit both (or leave them empty) to allow all users.
+To intentionally open the bot to everyone, use the wildcard:
+
+```yaml
+# config.yaml
+slack_authorized_usergroups: ["*"]
+```
+
+```bash
+export SLACK_AUTHORIZED_USERGROUPS=*
+```
+
+Leave the list empty/unset to deny all users (the safe default).
 
 ### Atlassian Rovo (Confluence/Jira)
 
@@ -253,8 +261,7 @@ refactor(component): code restructuring
 
 ## Configuration
 
-Configuration is loaded from a YAML/JSON file with environment variable overrides. Env vars always take precedence
-over file values.
+Configuration is loaded from a YAML/JSON file with environment variable overrides.
 
 | Config key                       | Environment variable           | Description                              |
 |----------------------------------|--------------------------------|------------------------------------------|
@@ -264,7 +271,18 @@ over file values.
 | `bedrock_agent_id`               | `BEDROCK_AGENT_ID`             | Amazon Bedrock Agent ID                  |
 | `bedrock_agent_alias_id`         | `BEDROCK_AGENT_ALIAS_ID`       | Amazon Bedrock Agent Alias ID            |
 | `slack_agent_router_secret_id`   | `SLACK_AGENT_ROUTER_SECRET_ID` | Secrets Manager secret name/ARN          |
-| `slack_authorized_usergroup`     | `SLACK_AUTHORIZED_USERGROUP`   | Slack User Group handle (default: sage-all) |
+| `slack_authorized_usergroups`    | `SLACK_AUTHORIZED_USERGROUPS`  | Authorized Slack User Group handles, comma-separated in the env var; `*` = allow all; empty = deny all |
+
+**Precedence (per setting):**
+
+1. **Environment variable wins** over the config file when it is set to a non-empty value.
+2. **Config file** value is used when the env var is unset or empty.
+3. **Built-in default** applies when neither is provided (for `slack_authorized_usergroups`, the default is empty → deny all).
+
+Two things to note for the list setting `slack_authorized_usergroups`:
+
+- The override is **whole-value replacement, not a merge** — if `SLACK_AUTHORIZED_USERGROUPS` is set, the file's list is ignored entirely (and vice versa). You cannot define some groups in the file and add more via the env var.
+- An **empty env var does not override** — `SLACK_AUTHORIZED_USERGROUPS=` (blank) is treated as unset, so the config-file value still applies. To actually clear the list from the environment, unset the variable rather than setting it blank.
 
 The config file path is resolved in order:
 1. `SLACK_AGENT_ROUTER_CONFIG` environment variable

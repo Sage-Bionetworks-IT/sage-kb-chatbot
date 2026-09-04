@@ -1,9 +1,14 @@
 """Authorization check via Slack User Group membership.
 
-Authorizes users against an *include* and an *exclude* list of Slack
-User Groups. A user is allowed when they are in the include set (or the
-include list is empty, meaning "allow all") and NOT in the exclude set.
-Exclude always wins over include.
+Fail-closed authorization: by default **no one** is allowed. Access is
+granted only when either:
+
+* the configured group list contains the wildcard ``"*"`` (open to every
+  workspace user), or
+* the user is a member of one of the configured User Groups.
+
+With no configuration the bot denies everyone, so a missing or forgotten
+setting fails safe rather than exposing internal content.
 
 Membership for each configured group is resolved via the Slack
 ``usergroups.list`` / ``usergroups.users.list`` APIs and cached with a
@@ -42,40 +47,39 @@ def _normalize_handles(handles: str | list[str] | None) -> list[str]:
 
 
 class UserGroupAuthorizer:
-    """Authorizes users against include/exclude Slack User Group lists.
+    """Authorizes users against a list of Slack User Groups (fail-closed).
 
-    A user is authorized when:
+    Access is **denied by default**. A user is authorized only when:
 
-    * they are a member of at least one *include* group — or the include
-      list is empty, which means "allow all users"; **and**
-    * they are not a member of any *exclude* group.
+    * the configured group list contains the wildcard ``"*"`` — the bot is
+      explicitly open to everyone; or
+    * the user is a member of at least one configured group.
 
-    Exclude takes precedence: an excluded user is denied even if they are
-    also in an include group.
+    When the list is empty (and contains no ``"*"``), every user is denied.
+    This is the safe failure mode: a missing configuration locks the bot
+    down rather than exposing it.
 
-    Each configured group handle is resolved to its ID on first use, and
-    the combined include/exclude member sets are refreshed from Slack on a
-    TTL.
+    Each configured group handle is resolved to its ID on first use, and the
+    combined member set is refreshed from Slack on a TTL.
 
     Parameters:
         slack_client: An async Slack WebClient
             (``slack_sdk.web.async_client.AsyncWebClient``).
         include_handles: Handles (without ``@``) of groups whose members are
-            allowed. Empty/None means allow all users. Accepts a single
-            handle string or a list.
-        exclude_handles: Handles (without ``@``) of groups whose members are
-            denied, overriding the include list. Accepts a single handle
-            string or a list.
-        cache_ttl_seconds: How long to cache the member lists before refreshing.
+            allowed, or the single wildcard ``"*"`` to allow everyone.
+            Accepts a single handle string or a list.
+        cache_ttl_seconds: How long to cache the member list before refreshing.
         usergroup_handle: Deprecated single-handle alias for
             ``include_handles``, kept for backward compatibility.
     """
+
+    #: Wildcard handle that grants access to every workspace user.
+    WILDCARD = "*"
 
     def __init__(
         self,
         slack_client: Any,
         include_handles: str | list[str] | None = None,
-        exclude_handles: str | list[str] | None = None,
         cache_ttl_seconds: float = _DEFAULT_CACHE_TTL_SECONDS,
         *,
         usergroup_handle: str | None = None,
@@ -84,7 +88,7 @@ class UserGroupAuthorizer:
 
         include_source = include_handles if include_handles is not None else usergroup_handle
         self._include_handles = _normalize_handles(include_source)
-        self._exclude_handles = _normalize_handles(exclude_handles)
+        self._allow_all = self.WILDCARD in self._include_handles
 
         self._cache_ttl = cache_ttl_seconds
 
@@ -92,45 +96,40 @@ class UserGroupAuthorizer:
         # handle has not been resolved yet or could not be found.
         self._usergroup_ids: dict[str, str] = {}
 
-        # Cached union member sets and their shared expiry timestamp.
+        # Cached union member set and its expiry timestamp.
         self._include_members: set[str] = set()
-        self._exclude_members: set[str] = set()
         self._cache_expires_at: float = 0.0
 
         # Serializes concurrent refresh attempts.
         self._refresh_lock = asyncio.Lock()
 
     @property
-    def enforces_authorization(self) -> bool:
-        """True if this authorizer would restrict anyone.
-
-        When both lists are empty the authorizer allows everyone, so callers
-        may skip wiring it up entirely.
-        """
-        return bool(self._include_handles or self._exclude_handles)
+    def allow_all(self) -> bool:
+        """Whether the bot is explicitly open to all users (wildcard configured)."""
+        return self._allow_all
 
     async def is_authorized(self, user_id: str) -> bool:
         """Return True if *user_id* is allowed to use the bot.
 
-        A user is allowed when they are in the include set (or the include
-        list is empty) and not in the exclude set. Exclude wins over include.
+        Authorized when the group list contains the ``"*"`` wildcard, or the
+        user is a member of a configured group. Denied otherwise (including
+        when nothing is configured).
 
-        Transparently refreshes the cached member lists when the TTL expires.
+        Transparently refreshes the cached member list when the TTL expires.
         On API errors the stale cache is used.
         """
-        # No restriction configured → allow all without any API calls.
-        if not self.enforces_authorization:
+        # Wildcard → allow everyone, no API calls needed.
+        if self._allow_all:
             return True
+
+        # Fail closed: with no groups configured, deny everyone.
+        if not self._include_handles:
+            return False
 
         now = time.monotonic()
         if now >= self._cache_expires_at:
             await self._refresh_members()
 
-        if user_id in self._exclude_members:
-            return False
-        if not self._include_handles:
-            # Exclude-only configuration → allow all minus excludes.
-            return True
         return user_id in self._include_members
 
     # ------------------------------------------------------------------
@@ -138,11 +137,11 @@ class UserGroupAuthorizer:
     # ------------------------------------------------------------------
 
     async def _refresh_members(self) -> None:
-        """Refresh the cached include/exclude member sets from the Slack API.
+        """Refresh the cached include member set from the Slack API.
 
         Uses a lock so that concurrent callers don't all hit the API at
-        once after TTL expiry. On any failure the previously cached sets
-        are retained (stale-cache fallback), and the retry TTL is shortened.
+        once after TTL expiry. On any failure the previously cached set is
+        retained (stale-cache fallback), and the retry TTL is shortened.
         """
         async with self._refresh_lock:
             # Double-check after acquiring the lock — another coroutine may
@@ -154,15 +153,12 @@ class UserGroupAuthorizer:
             all_resolved = True
             try:
                 include_members, include_ok = await self._collect_members(self._include_handles)
-                exclude_members, exclude_ok = await self._collect_members(self._exclude_handles)
-                all_resolved = include_ok and exclude_ok
+                all_resolved = include_ok
 
-                # Only replace a set on a successful refresh so a transient
+                # Only replace the set on a successful refresh so a transient
                 # failure doesn't wipe a previously good member set.
                 if include_ok:
                     self._include_members = include_members
-                if exclude_ok:
-                    self._exclude_members = exclude_members
             except Exception:
                 logger.exception("Failed to refresh User Group membership — using stale cache")
                 all_resolved = False

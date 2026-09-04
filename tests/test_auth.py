@@ -1,9 +1,9 @@
 """Unit tests for UserGroupAuthorizer (Slack User Group authorization).
 
-Covers:
-- Allow-all default (no include/exclude configured)
+Authorization is fail-closed. Covers:
+- Deny-all default (nothing configured)
+- allow_all flag (explicit open access, no API calls)
 - Include-list membership (member allowed, non-member denied)
-- Exclude-list denial and exclude-wins-over-include precedence
 - Multiple include groups (union membership)
 - Lazy User Group handle → ID resolution (and caching across refreshes)
 - Caching / TTL behavior (no re-fetch within TTL, refresh after expiry)
@@ -80,26 +80,49 @@ def _controllable_clock(start: float = 1000.0):
 
 
 # ---------------------------------------------------------------------------
-# Allow-all default
+# Deny-all default (fail closed)
 # ---------------------------------------------------------------------------
 
 
-class TestAllowAllDefault:
-    async def test_no_lists_allows_everyone(self) -> None:
-        """With neither include nor exclude configured, every user is allowed."""
-        client = _make_client(members=[])
+class TestDenyAllDefault:
+    async def test_no_config_denies_everyone(self) -> None:
+        """With nothing configured, every user is denied and no API is called."""
+        client = _make_client(members=["U1"])
         authorizer = UserGroupAuthorizer(client)
 
-        assert await authorizer.is_authorized("anyone") is True
-        # No restriction → no need to hit the Slack API at all.
+        assert await authorizer.is_authorized("U1") is False
+        assert await authorizer.is_authorized("anyone") is False
+        # Fail-closed with no groups → no need to hit the Slack API at all.
         client.usergroups_list.assert_not_awaited()
 
-    def test_enforces_authorization_flag(self) -> None:
-        """enforces_authorization reflects whether any list is configured."""
+    def test_allow_all_property_defaults_false(self) -> None:
         client = _make_client()
-        assert UserGroupAuthorizer(client).enforces_authorization is False
-        assert UserGroupAuthorizer(client, include_handles=["it"]).enforces_authorization is True
-        assert UserGroupAuthorizer(client, exclude_handles=["bots"]).enforces_authorization is True
+        assert UserGroupAuthorizer(client).allow_all is False
+        assert UserGroupAuthorizer(client, include_handles=["*"]).allow_all is True
+
+
+# ---------------------------------------------------------------------------
+# Wildcard "*" (allow all)
+# ---------------------------------------------------------------------------
+
+
+class TestWildcardAllowAll:
+    async def test_wildcard_authorizes_everyone(self) -> None:
+        """A "*" entry authorizes any user without any API calls."""
+        client = _make_client(members=[])
+        authorizer = UserGroupAuthorizer(client, include_handles=["*"])
+
+        assert await authorizer.is_authorized("anyone") is True
+        client.usergroups_list.assert_not_awaited()
+
+    async def test_wildcard_alongside_groups_still_allows_all(self) -> None:
+        """If "*" is present, other listed groups are irrelevant — allow all."""
+        client = _make_client(members=["U1"], handle="it-team")
+        authorizer = UserGroupAuthorizer(client, include_handles=["it-team", "*"])
+
+        assert authorizer.allow_all is True
+        assert await authorizer.is_authorized("someone-else") is True
+        client.usergroups_list.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +144,7 @@ class TestIncludeList:
         assert await authorizer.is_authorized("U999") is False
 
     async def test_union_across_multiple_include_groups(self) -> None:
-        """A user in ANY included group is authorized."""
+        """A user in ANY authorized group is allowed."""
         client = _make_multi_client({"it-team": ["U1"], "sec-team": ["U2"]})
         authorizer = UserGroupAuthorizer(client, include_handles=["it-team", "sec-team"])
 
@@ -136,41 +159,6 @@ class TestIncludeList:
 
         assert await authorizer.is_authorized("U1") is True
         assert await authorizer.is_authorized("U2") is False
-
-
-# ---------------------------------------------------------------------------
-# Exclude list + precedence
-# ---------------------------------------------------------------------------
-
-
-class TestExcludeList:
-    async def test_excluded_user_denied_with_empty_include(self) -> None:
-        """Exclude alone: everyone allowed except excluded members."""
-        client = _make_multi_client({"contractors": ["U9"]})
-        authorizer = UserGroupAuthorizer(client, exclude_handles=["contractors"])
-
-        assert await authorizer.is_authorized("U1") is True  # allow-all baseline
-        assert await authorizer.is_authorized("U9") is False  # excluded
-
-    async def test_exclude_overrides_include(self) -> None:
-        """A user in both include and exclude is denied (exclude wins)."""
-        client = _make_multi_client({"it-team": ["U1", "U2"], "contractors": ["U2"]})
-        authorizer = UserGroupAuthorizer(
-            client,
-            include_handles=["it-team"],
-            exclude_handles=["contractors"],
-        )
-
-        assert await authorizer.is_authorized("U1") is True
-        assert await authorizer.is_authorized("U2") is False  # excluded despite include
-
-    async def test_union_across_multiple_exclude_groups(self) -> None:
-        client = _make_multi_client({"bots": ["U8"], "contractors": ["U9"]})
-        authorizer = UserGroupAuthorizer(client, exclude_handles=["bots", "contractors"])
-
-        assert await authorizer.is_authorized("U8") is False
-        assert await authorizer.is_authorized("U9") is False
-        assert await authorizer.is_authorized("U1") is True
 
 
 # ---------------------------------------------------------------------------
