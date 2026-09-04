@@ -14,11 +14,11 @@ the application, which executes the tool call against the Rovo MCP server, then 
 answer synthesis.
 
 Key components:
-slack_allow_all_users
+
 - **SlackAgentApp** — Slack Socket Mode listener, handles messages and mentions
 - **BedrockAgentOrchestrator** — Manages the Bedrock Agent conversation loop with timeout and iteration guards
 - **RovoMCPBackend** — Calls Atlassian Rovo MCP to search Confluence pages and Jira issues
-- **UserGroupAuthorizer** — Checks Slack User Group membership (sage-all) with a cached member list
+- **UserGroupAuthorizer** — Checks Slack User Group membership against the configured authorized groups, with a cached member list
 - **RateLimiter** — Per-user rate limiting
 - **AuditLogger** — Structured logging of all interactions
 
