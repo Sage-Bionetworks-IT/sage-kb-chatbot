@@ -629,6 +629,33 @@ class SlackAgentApp:
         if self.handler is not None:
             await self.handler.close_async()
 
+    async def is_connected(self) -> bool:
+        """Return whether the Socket Mode WebSocket is currently connected.
+
+        Used by the health check server to decide healthy (200) vs.
+        unhealthy (503). Returns ``False`` before ``start()`` has created
+        the handler, and treats any error querying the underlying client
+        as disconnected (fail unhealthy) so the container is recycled
+        rather than left in an unknown state.
+
+        The aiohttp-based ``AsyncSocketModeHandler`` exposes a
+        ``client.is_connected()`` coroutine; we await it. A synchronous
+        client implementation is also tolerated.
+        """
+        if self.handler is None:
+            return False
+        client = getattr(self.handler, "client", None)
+        if client is None:
+            return False
+        try:
+            result = client.is_connected()
+            if asyncio.iscoroutine(result):
+                result = await result
+            return bool(result)
+        except Exception as exc:
+            logger.warning("Failed to query Socket Mode connection status: %s", exc)
+            return False
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
