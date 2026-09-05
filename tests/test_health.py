@@ -154,7 +154,7 @@ class TestBackendHealthReporting:
 
 async def _timed(coro: Any) -> float:
     """Await *coro* and return the elapsed wall-clock seconds."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     start = loop.time()
     await coro
     return loop.time() - start
