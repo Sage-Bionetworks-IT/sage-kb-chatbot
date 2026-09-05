@@ -360,8 +360,39 @@ When running on ECS/Fargate, AWS credentials come from the task role — no need
 
 ### Health check
 
-The container exposes a health check endpoint at `http://localhost:8080/health`. Docker's built-in `HEALTHCHECK`
-instruction is configured in the Dockerfile:
+The app runs a lightweight HTTP health check server (`slack_agent_router/health.py`) on port 8080, started
+alongside the Socket Mode listener. It exposes a single endpoint, `GET /health`, used by the Docker/ECS container
+health check. There is no public inbound endpoint — Socket Mode uses an outbound WebSocket, so `/health` is only
+reachable inside the container/task.
+
+**Status semantics** — the HTTP status reflects the Slack Socket Mode WebSocket connection:
+
+| Condition                     | HTTP status | `status`    |
+|-------------------------------|-------------|-------------|
+| WebSocket connected           | `200`       | `healthy`   |
+| WebSocket disconnected        | `503`       | `unhealthy` |
+
+Backend reachability is reported in the body but is **informational only** — a backend being down is a degraded
+state, not an unhealthy one, so it never changes the HTTP status. Each backend is probed via its `health_check()`
+with a 500ms per-backend timeout so the endpoint stays fast even if a backend hangs. Each backend is reported as:
+
+- `ok` — `health_check()` returned truthy
+- `error` — `health_check()` returned falsy or raised
+- `timeout` — `health_check()` exceeded the 500ms budget
+
+**Response body** (HTTP 200):
+
+```json
+{
+  "status": "healthy",
+  "websocket": "connected",
+  "backends": {
+    "Atlassian Rovo (Confluence/Jira)": "ok"
+  }
+}
+```
+
+**Docker `HEALTHCHECK`** — configured in the Dockerfile (a non-200 status such as `503` makes the probe fail):
 
 - Interval: 30s
 - Timeout: 5s
@@ -394,6 +425,7 @@ src/slack_agent_router/
 ├── orchestrator.py    # Bedrock Agent conversation loop
 ├── auth.py            # User Group authorization check
 ├── dedup.py           # Event deduplication (TTL cache)
+├── health.py          # HTTP health check server (/health on port 8080)
 ├── backends/
 │   └── rovo.py        # Atlassian Rovo MCP client
 ├── rate_limiter.py    # Per-user rate limiting
