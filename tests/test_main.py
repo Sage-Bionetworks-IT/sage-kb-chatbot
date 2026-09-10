@@ -23,6 +23,7 @@ from slack_agent_router.main import (
     _REQUIRED_SECRET_KEYS,
     _ROVO_MCP_SERVER_URL_ENV,
     _SLACK_AGENT_ROUTER_SECRET_ID_ENV,
+    _SLACK_AUTHORIZED_USERGROUPS_ENV,
     _validate_required_secret_keys,
     load_config,
     load_secrets,
@@ -341,6 +342,79 @@ class TestLoadConfigFileResolution:
         config = load_config(config_path=str(config_file))
         assert config.atlassian_cloud_id == "from-file"
         assert config.bedrock_agent_id == "agent-env"
+
+
+# ------------------------------------------------------------------
+# load_config — slack_authorized_usergroups (list field + precedence)
+# ------------------------------------------------------------------
+
+
+class TestLoadConfigAuthorizedUsergroups:
+    """Precedence and parsing for the authorized-usergroups list field."""
+
+    def test_defaults_to_empty_deny_all(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Unset in both env and file → empty tuple (deny all)."""
+        monkeypatch.chdir(tmp_path)
+        _set_config_env(monkeypatch)
+        monkeypatch.delenv(_SLACK_AUTHORIZED_USERGROUPS_ENV, raising=False)
+        assert load_config().slack_authorized_usergroups == ()
+
+    def test_env_comma_separated_parsed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Env var is split on commas, trimmed, de-duplicated, order preserved."""
+        monkeypatch.chdir(tmp_path)
+        _set_config_env(monkeypatch)
+        monkeypatch.setenv(_SLACK_AUTHORIZED_USERGROUPS_ENV, " it-team , sec-team ,it-team")
+        assert load_config().slack_authorized_usergroups == ("it-team", "sec-team")
+
+    def test_wildcard_from_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.chdir(tmp_path)
+        _set_config_env(monkeypatch)
+        monkeypatch.setenv(_SLACK_AUTHORIZED_USERGROUPS_ENV, "*")
+        assert load_config().slack_authorized_usergroups == ("*",)
+
+    def test_yaml_list_parsed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A native YAML list is accepted from the config file."""
+        _clear_config_env(monkeypatch)
+        monkeypatch.delenv(_SLACK_AUTHORIZED_USERGROUPS_ENV, raising=False)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            textwrap.dedent(
+                """\
+                atlassian_service_user: test@example.com
+                rovo_mcp_server_url: https://mcp.atlassian.com/v1/mcp
+                atlassian_cloud_id: cloud-123
+                bedrock_agent_id: agent-789
+                bedrock_agent_alias_id: alias-abc
+                slack_agent_router_secret_id: test-secret-arn
+                slack_authorized_usergroups:
+                  - it-team
+                  - sec-team
+                """
+            )
+        )
+        config = load_config(config_path=str(config_file))
+        assert config.slack_authorized_usergroups == ("it-team", "sec-team")
+
+    def test_env_replaces_file_wholesale_no_merge(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-empty env var replaces the file list entirely (no merge)."""
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({**_CONFIG_FILE_VALUES, "slack_authorized_usergroups": ["file-team"]}))
+        monkeypatch.setenv(_SLACK_AUTHORIZED_USERGROUPS_ENV, "env-team")
+
+        config = load_config(config_path=str(config_file))
+        # File value is ignored entirely; not merged.
+        assert config.slack_authorized_usergroups == ("env-team",)
+
+    def test_empty_env_does_not_override_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A blank env var is treated as unset → the file value still applies."""
+        _clear_config_env(monkeypatch)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({**_CONFIG_FILE_VALUES, "slack_authorized_usergroups": ["file-team"]}))
+        monkeypatch.setenv(_SLACK_AUTHORIZED_USERGROUPS_ENV, "   ")
+
+        config = load_config(config_path=str(config_file))
+        assert config.slack_authorized_usergroups == ("file-team",)
 
 
 # ------------------------------------------------------------------
