@@ -198,15 +198,15 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Remove 👀 and add ✅ when answer is posted
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
 
-- [ ] 13. Implement health check server
-  - [ ] 13.1 Write unit tests for HealthCheck (RED)
+- [x] 13. Implement health check server
+  - [x] 13.1 Write unit tests for HealthCheck (RED)
     - Test returns 200 when WebSocket connected
     - Test returns 503 when WebSocket disconnected
     - Test backend timeout handling reports "timeout" in response
     - Tests should fail initially (no implementation yet)
     - _Requirements: 11.2, 11.3, 11.5_
 
-  - [ ] 13.2 Implement HealthCheck HTTP server (GREEN)
+  - [x] 13.2 Implement HealthCheck HTTP server (GREEN)
     - Create `src/slack_agent_router/health.py`
     - Run aiohttp server on port 8080 with /health endpoint
     - Return HTTP 200 when WebSocket is connected, HTTP 503 when disconnected
