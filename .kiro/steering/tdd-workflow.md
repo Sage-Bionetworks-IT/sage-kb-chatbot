@@ -55,11 +55,14 @@ class TestModuleName:
         with pytest.raises(ValueError, match="Input cannot be empty"):
             function_under_test({})
 
-    @pytest.mark.parametrize("input,expected", [
-        (None, None),
-        ("", ""),
-        ("valid", "VALID"),
-    ])
+    @pytest.mark.parametrize(
+        "input,expected",
+        [
+            (None, None),
+            ("", ""),
+            ("valid", "VALID"),
+        ],
+    )
     def test_edge_cases(self, input, expected):
         assert function_under_test(input) == expected
 ```

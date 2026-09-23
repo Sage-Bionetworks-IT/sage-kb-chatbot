@@ -201,9 +201,10 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class AgentResponse:
     """Response from the Bedrock Agent."""
-    answer: str                # Synthesized answer text
-    source_urls: list[str]     # Cited source links
-    tool_calls_made: list[str] # Which action groups were invoked
+
+    answer: str  # Synthesized answer text
+    source_urls: list[str]  # Cited source links
+    tool_calls_made: list[str]  # Which action groups were invoked
     latency_ms: float
 
 
@@ -286,11 +287,12 @@ Both backends return a common `BackendResult` that the orchestrator converts to 
 @dataclass(frozen=True)
 class BackendResult:
     """Internal result from a backend query. Not sent to Bedrock directly."""
+
     backend_name: str
     success: bool
-    answer: str | None        # The answer text or search results
-    source_urls: list[str]    # Links to source documents
-    error_message: str | None # Error details if success=False
+    answer: str | None  # The answer text or search results
+    source_urls: list[str]  # Links to source documents
+    error_message: str | None  # Error details if success=False
     latency_ms: float
 ```
 
@@ -322,8 +324,7 @@ class RovoMCPBackend:
         """Search and summarize Confluence/Jira content via Rovo MCP Server."""
         ...
 
-    async def health_check(self) -> bool:
-        ...
+    async def health_check(self) -> bool: ...
 ```
 
 **Responsibilities**:
@@ -352,8 +353,7 @@ class HealthCheck:
         app: "SlackAgentApp",
         backends: list,
         port: int = 8080,
-    ):
-        ...
+    ): ...
 
     async def handle(self, request: web.Request) -> web.Response:
         """Health check endpoint.
@@ -405,6 +405,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class QueryAuditRecord:
     """Structured audit record for each question-answer cycle."""
+
     request_id: str
     user_id: str
     channel_id: str
@@ -412,8 +413,8 @@ class QueryAuditRecord:
     backends_queried: list[str]
     backends_succeeded: list[str]
     backends_failed: list[str]
-    agent_model: str | None     # Bedrock Agent model used for orchestration
-    answer_length: int              # Character count of final answer
+    agent_model: str | None  # Bedrock Agent model used for orchestration
+    answer_length: int  # Character count of final answer
     total_latency_ms: float
     backend_latencies_ms: dict[str, float]
     agent_latency_ms: float | None  # Total Bedrock Agent orchestration time (all InvokeAgent calls)
@@ -424,8 +425,7 @@ class QueryAuditRecord:
 class AuditLogger:
     """Structured logging and audit trail for all bot interactions."""
 
-    def __init__(self) -> None:
-        ...
+    def __init__(self) -> None: ...
 
     def log_question_received(self, request_id: str, user_id: str, question: str) -> None:
         """Log when a question is received (INFO level)."""
@@ -486,6 +486,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class RateLimitConfig:
     """Rate limit thresholds."""
+
     per_user_per_minute: int = 5
     per_user_per_hour: int = 30
     per_user_per_day: int = 100
@@ -496,8 +497,7 @@ class RateLimitConfig:
 class RateLimiter:
     """In-memory rate limiter with sliding window counters."""
 
-    def __init__(self, config: RateLimitConfig | None = None):
-        ...
+    def __init__(self, config: RateLimitConfig | None = None): ...
 
     def check(self, user_id: str) -> tuple[bool, str | None]:
         """Check if a request is allowed.
@@ -535,6 +535,7 @@ class RateLimiter:
 @dataclass(frozen=True)
 class ParsedQuestion:
     """Normalized question from any Slack input method."""
+
     event_type: str
     user_id: str
     channel_id: str
@@ -551,6 +552,7 @@ class ParsedQuestion:
 @dataclass(frozen=True)
 class BackendConfig:
     """Configuration for a single backend."""
+
     name: str
     enabled: bool
     timeout_seconds: int
@@ -565,11 +567,12 @@ The structure returned by each backend and sent back to the Bedrock Agent via `r
 @dataclass(frozen=True)
 class ToolOutput:
     """Structured output from a backend tool execution."""
+
     success: bool
-    content: str              # The answer text or search results (plain text)
-    sources: list[dict]       # List of source references
+    content: str  # The answer text or search results (plain text)
+    sources: list[dict]  # List of source references
     # Each source: {"title": str, "url": str, "system": str}
-    error_message: str | None # Error details if success=False
+    error_message: str | None  # Error details if success=False
 
 
 # Example: successful Rovo MCP result
