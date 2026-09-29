@@ -92,6 +92,9 @@ def _make_client() -> AsyncMock:
     """
     client = AsyncMock()
     client.chat_postMessage.return_value = {"ts": _PLACEHOLDER_TS, "channel": "C99999"}
+    # auth_test backs _get_bot_user_id(); return a real dict so callbacks that
+    # resolve the bot user id (mentions, DMs) get a usable string.
+    client.auth_test.return_value = {"user_id": "UBOTID"}
     return client
 
 
@@ -1281,12 +1284,15 @@ class TestGracefulShutdown:
         say = AsyncMock()
         client = _make_client()
 
-        # Start processing a question; it blocks inside slow_ask.
-        request = asyncio.create_task(app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID"))
+        # Start processing a question through the real Bolt callback, which
+        # registers the work as in-flight before its first await. It blocks
+        # inside slow_ask.
+        await app._handle_mention(_pto_event(), say=say, client=client)
         # Let the request reach the blocking await and register as in-flight.
         while not app._in_flight:
             await asyncio.sleep(0)
         assert len(app._in_flight) == 1
+        (request,) = tuple(app._in_flight)
 
         # Begin shutdown; it must not close the socket while the request runs.
         stop_task = asyncio.create_task(app.stop())
@@ -1328,9 +1334,10 @@ class TestGracefulShutdown:
         say = AsyncMock()
         client = _make_client()
 
-        request = asyncio.create_task(app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID"))
+        await app._handle_mention(_pto_event(), say=say, client=client)
         await started.wait()
         assert len(app._in_flight) == 1
+        (request,) = tuple(app._in_flight)
 
         await app.stop()
 
@@ -1358,7 +1365,11 @@ class TestGracefulShutdown:
 
         say = AsyncMock()
         client = _make_client()
-        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+        # Route through the real callback so _track sees the shutdown flag and
+        # refuses the work before it can register or reach the orchestrator.
+        await app._handle_mention(_pto_event(), say=say, client=client)
+        # Let the event loop run any scheduled work (there should be none).
+        await asyncio.sleep(0)
 
         orch.ask.assert_not_called()
         assert not app._in_flight

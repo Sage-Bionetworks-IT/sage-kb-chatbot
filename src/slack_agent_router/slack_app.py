@@ -42,11 +42,17 @@ _ACTION_GROUP_PROGRESS: dict[str, str] = {
 }
 _PROGRESS_DEFAULT = "⏳ Searching..."
 
-# Graceful shutdown: how long to wait for in-flight requests to finish
-# before disconnecting the WebSocket. ECS sends SIGTERM with a default
-# 30-second stop timeout before force-killing the task, so we bound the
-# drain to that window (Requirements 13.1, 13.2).
-_SHUTDOWN_DRAIN_TIMEOUT = 30.0  # seconds
+# Graceful shutdown: ECS sends SIGTERM and force-kills (SIGKILL) the task
+# after a default 30-second stop timeout, so all shutdown work must finish
+# within that window (Requirements 13.1, 13.2).
+_ECS_STOP_TIMEOUT = 30.0  # seconds
+# Reserve a margin at the end of the ECS window for cancelling stragglers
+# (awaiting their unwind) and closing the WebSocket. Without it, the drain
+# wait alone consumes the full timeout and cleanup races SIGKILL.
+_SHUTDOWN_CLEANUP_MARGIN = 5.0  # seconds
+# How long to wait for in-flight requests to finish before we start
+# abandoning them and disconnecting. Bounded so the reserved margin remains.
+_SHUTDOWN_DRAIN_TIMEOUT = _ECS_STOP_TIMEOUT - _SHUTDOWN_CLEANUP_MARGIN  # seconds
 
 
 class SlackAgentApp:
@@ -282,45 +288,47 @@ class SlackAgentApp:
         parsed = self.parse_event(event, bot_user_id)
         thread_ts = parsed.thread_ts or parsed.event_ts
         # parsed.event_ts is the user's message ts — the target for reactions.
-        await self._run_tracked(
-            self._process_question(
-                parsed,
-                say=say,
-                client=client,
-                thread_ts=thread_ts,
-                reaction_ts=parsed.event_ts,
-            )
+        # The Bolt callback has already registered this work as an in-flight
+        # task (see _track), so we run the pipeline inline here.
+        await self._process_question(
+            parsed,
+            say=say,
+            client=client,
+            thread_ts=thread_ts,
+            reaction_ts=parsed.event_ts,
         )
 
     # ------------------------------------------------------------------
     # In-flight request tracking (graceful shutdown — Requirements 13.1, 13.2)
     # ------------------------------------------------------------------
 
-    async def _run_tracked(self, coro: Any) -> None:
-        """Run a question-processing coroutine as a tracked in-flight task.
+    def _track(self, coro: Any) -> asyncio.Task[Any] | None:
+        """Register a callback coroutine as a tracked in-flight task.
 
-        Registering the work as a task (rather than awaiting the coroutine
-        inline) lets ``stop()`` await outstanding requests during a graceful
-        shutdown. The caller still awaits completion here, so per-event
-        behavior is unchanged; the task is only a handle for the drain.
+        This is deliberately **synchronous** and must be called by a Bolt
+        callback *before* it awaits anything. Registration into
+        ``_in_flight`` happens with no intervening ``await``, so a
+        concurrent ``stop()`` either sees this task (and drains it) or has
+        not been triggered yet — it can never slip through the gap between
+        "callback accepted" and "work registered". That gap is exactly what
+        dropped pre-shutdown questions when tracking started only after the
+        first await (e.g. ``_get_bot_user_id()`` or ``ack()``).
 
-        When the app is already shutting down, new work is refused: the
-        coroutine is closed without running so the drain set can't grow
-        while we're emptying it.
+        The task self-removes from ``_in_flight`` when it finishes via a
+        done callback, so callers don't need to await it to keep the set
+        clean. Returns the task, or ``None`` when work is refused because a
+        shutdown is already in progress (the coroutine is closed so it
+        doesn't emit a "coroutine was never awaited" warning).
         """
         if self._shutting_down:
-            # Refuse new work during shutdown; close the coroutine so it
-            # doesn't emit a "coroutine was never awaited" warning.
             coro.close()
             logger.info("Refusing new request — shutdown in progress")
-            return
+            return None
 
         task = asyncio.ensure_future(coro)
         self._in_flight.add(task)
-        try:
-            await task
-        finally:
-            self._in_flight.discard(task)
+        task.add_done_callback(self._in_flight.discard)
+        return task
 
     # ------------------------------------------------------------------
     # Deduplication
@@ -591,7 +599,16 @@ class SlackAgentApp:
     # ------------------------------------------------------------------
 
     async def _handle_mention(self, event: dict[str, Any], say: Any, client: Any) -> None:
-        """Handle @bot mentions in channels."""
+        """Handle @bot mentions in channels.
+
+        Registers the whole callback as a tracked in-flight task before its
+        first await (``_get_bot_user_id`` does an ``auth_test`` round-trip),
+        so a shutdown that lands mid-auth drains this request instead of
+        dropping it.
+        """
+        self._track(self._run_mention(event, say, client))
+
+    async def _run_mention(self, event: dict[str, Any], say: Any, client: Any) -> None:
         bot_user_id = await self._get_bot_user_id(client)
         await self.handle_event(event, say=say, client=client, bot_user_id=bot_user_id)
 
@@ -601,6 +618,11 @@ class SlackAgentApp:
         Ignores non-IM channels, message subtypes (edits, bot_message,
         etc.), bot-authored messages, and the bot's own messages to
         prevent reply loops.
+
+        The cheap synchronous filters run first so ignored events aren't
+        registered as in-flight work. Anything that survives them is tracked
+        before the first await (``_get_bot_user_id``) so a shutdown during
+        auth drains it rather than dropping it.
         """
         if event.get("channel_type") != "im":
             return
@@ -610,6 +632,9 @@ class SlackAgentApp:
         # Ignore messages from bots (including this bot's own replies)
         if event.get("bot_id"):
             return
+        self._track(self._run_dm(event, say, client))
+
+    async def _run_dm(self, event: dict[str, Any], say: Any, client: Any) -> None:
         bot_user_id = await self._get_bot_user_id(client)
         # Ignore messages from the bot itself (belt-and-suspenders)
         if event.get("user") == bot_user_id:
@@ -630,12 +655,30 @@ class SlackAgentApp:
         pipeline. Slack may retry the command if the ack is slow, so we
         deduplicate on ``trigger_id`` (after ack) and skip duplicates
         silently.
+
+        The command is registered as a tracked in-flight task before the
+        first await (``ack()``), so a shutdown that lands between accepting
+        the command and acknowledging it drains the request rather than
+        dropping a pre-shutdown question. The ack still runs first inside
+        the tracked coroutine, preserving the 3-second acknowledgement
+        window.
         """
+        task = self._track(self._run_slash_command(ack, command, say, client))
+        # Await the tracked task so the ack (and any error it raises)
+        # propagates back to Bolt as before. When work is refused during
+        # shutdown, still acknowledge so Slack doesn't retry a command we
+        # won't process.
+        if task is None:
+            await ack()
+            return
+        await task
+
+    async def _run_slash_command(self, ack: Any, command: dict[str, Any], say: Any, client: Any) -> None:
         await ack()
         if self._is_duplicate(command.get("trigger_id")):
             return
         parsed = self.parse_command(command)
-        await self._run_tracked(self._process_question(parsed, say=say, client=client))
+        await self._process_question(parsed, say=say, client=client)
 
     # ------------------------------------------------------------------
     # Session ID derivation
@@ -677,7 +720,7 @@ class SlackAgentApp:
         Ordering matters (Requirements 13.1, 13.2):
 
         1. Mark the app as shutting down so no *new* questions are accepted
-           (``_run_tracked`` refuses them). This bounds the drain set.
+           (``_track`` refuses them). This bounds the drain set.
         2. Wait for outstanding in-flight requests to finish, up to
            ``_shutdown_timeout`` seconds. ECS sends SIGTERM with a default
            30-second stop timeout before force-killing the task, so we drain
@@ -717,8 +760,20 @@ class SlackAgentApp:
             )
             for task in still_pending:
                 task.cancel()
-            # Give cancelled tasks a moment to unwind so they don't leak.
-            await asyncio.gather(*still_pending, return_exceptions=True)
+            # Give cancelled tasks a moment to unwind so they don't leak, but
+            # bound it so a task that swallows cancellation can't eat the whole
+            # cleanup margin and leave no time to close the WebSocket. We only
+            # need half the margin here; the rest is reserved for close_async().
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*still_pending, return_exceptions=True),
+                    timeout=_SHUTDOWN_CLEANUP_MARGIN / 2,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Cancelled request(s) did not unwind within %.1fs — leaving them to be reaped by process exit",
+                    _SHUTDOWN_CLEANUP_MARGIN / 2,
+                )
         else:
             logger.info("All in-flight requests drained cleanly")
 
