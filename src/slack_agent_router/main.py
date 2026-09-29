@@ -20,10 +20,29 @@ import logging
 import os
 import signal
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# Shutdown watchdog
+# ------------------------------------------------------------------
+# The graceful drain in SlackAgentApp.stop() is best-effort: a request that
+# swallows CancelledError stays alive on the event loop, and asyncio.run()'s
+# final cleanup awaits every remaining task *unboundedly*. Such a task would
+# keep the process alive until ECS force-kills it (SIGKILL). To guarantee we
+# exit within the ECS stop window regardless, arm a watchdog on its own thread
+# when shutdown begins; if graceful shutdown overruns the budget, force-exit
+# cleanly ourselves instead of waiting for SIGKILL.
+#
+# ECS default stop timeout is 30s; leave a safety margin so we self-exit before
+# it fires (and while stdout can still flush the log line).
+_WATCHDOG_TIMEOUT_SECONDS = 28.0
+# Bound the final reap of cancelled in-flight tasks so it can't itself hang.
+_LEFTOVER_REAP_TIMEOUT_SECONDS = 2.0
 
 
 # ------------------------------------------------------------------
@@ -441,8 +460,35 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
+    watchdog: threading.Timer | None = None
+
+    def _force_exit() -> None:
+        # Runs on the watchdog thread, so it fires even if the event loop is
+        # wedged waiting on a task that refuses to cancel. Flush handlers first
+        # so the reason is visible, then hard-exit without running the asyncio
+        # runner's unbounded final task gather (which is what would hang).
+        logger.error(
+            "Graceful shutdown exceeded %.0fs — forcing process exit "
+            "(a non-cooperative in-flight request likely swallowed cancellation)",
+            _WATCHDOG_TIMEOUT_SECONDS,
+        )
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+        os._exit(0)
+
     async def _shutdown() -> None:
+        nonlocal watchdog
         logger.info("Shutting down Slack Agent Router")
+        # Arm the watchdog before any awaits so it covers the whole shutdown,
+        # including asyncio.run()'s final task cleanup after main() returns.
+        # Idempotent: SIGTERM-then-SIGINT won't stack timers.
+        if watchdog is None:
+            watchdog = threading.Timer(_WATCHDOG_TIMEOUT_SECONDS, _force_exit)
+            watchdog.daemon = True
+            watchdog.start()
         await app.stop()
         shutdown_event.set()
 
@@ -484,6 +530,20 @@ async def main() -> None:
 
     # Allow tasks to finish cancellation
     await asyncio.gather(watcher, *tasks, return_exceptions=True)
+
+    # app.stop() already cancelled any stragglers; explicitly gather them here
+    # (bounded) so asyncio.run()'s final, *unbounded* task cleanup has nothing
+    # left to await. Cooperative tasks settle immediately; a non-cooperative
+    # one is capped by the timeout and then left for the watchdog to reap.
+    leftover = {t for t in app.in_flight_tasks() if isinstance(t, asyncio.Future)}
+    if leftover:
+        logger.info("Reaping %d cancelled in-flight task(s) before exit", len(leftover))
+        await asyncio.wait(leftover, timeout=_LEFTOVER_REAP_TIMEOUT_SECONDS)
+
+    # Graceful shutdown finished under our control — disarm the watchdog so a
+    # normally-exited process doesn't linger waiting for the timer.
+    if watchdog is not None:
+        watchdog.cancel()
 
     logger.info("Slack Agent Router stopped")
 
