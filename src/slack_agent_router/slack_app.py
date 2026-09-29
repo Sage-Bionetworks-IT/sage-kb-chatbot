@@ -46,9 +46,9 @@ _PROGRESS_DEFAULT = "⏳ Searching..."
 # after a default 30-second stop timeout, so all shutdown work must finish
 # within that window (Requirements 13.1, 13.2).
 _ECS_STOP_TIMEOUT = 30.0  # seconds
-# Reserve a margin at the end of the ECS window for cancelling stragglers
-# (awaiting their unwind) and closing the WebSocket. Without it, the drain
-# wait alone consumes the full timeout and cleanup races SIGKILL.
+# Reserve a margin at the end of the ECS window for cancelling stragglers and
+# closing the WebSocket. Without it, the drain wait alone consumes the full
+# timeout and cleanup races SIGKILL.
 _SHUTDOWN_CLEANUP_MARGIN = 5.0  # seconds
 # How long to wait for in-flight requests to finish before we start
 # abandoning them and disconnecting. Bounded so the reserved margin remains.
@@ -770,55 +770,20 @@ class SlackAgentApp:
 
         if still_pending:
             logger.warning(
-                "Shutdown timeout (%.0fs) reached — abandoning %d in-flight request(s)",
+                "Shutdown timeout (%.0fs) reached — cancelling %d in-flight request(s)",
                 self._shutdown_timeout,
                 len(still_pending),
             )
             for task in still_pending:
                 task.cancel()
-            # Give cancelled tasks a moment to unwind so they don't leak, but
-            # bound it so a task that swallows cancellation can't eat the whole
-            # cleanup margin and leave no time to close the WebSocket. We only
-            # need half the margin here; the rest is reserved for close_async().
-            #
-            # Use asyncio.wait (not wait_for) for a true hard bound *on this
-            # method*: since Python 3.8.1, wait_for cancels its awaitable at
-            # the deadline and then *blocks until that cancellation completes*,
-            # so a task that suppresses CancelledError could keep us here
-            # indefinitely. wait returns at the timeout regardless, so we can
-            # go on to close the WebSocket.
-            #
-            # Caveat: this bounds the method, not the process. These tasks live
-            # on the event loop, so asyncio.run()'s shutdown will cancel and
-            # await them again on the way out — a request that keeps swallowing
-            # CancelledError will hang that final wait too (asyncio has no
-            # preemption). The real backstop is ECS force-killing the task
-            # (SIGKILL) once its stop timeout expires. For a genuinely graceful
-            # exit the request work must be cancellation-cooperative or run
-            # behind something terminable (thread/subprocess/executor).
-            _unwound, not_unwound = await asyncio.wait(
-                still_pending,
-                timeout=_SHUTDOWN_CLEANUP_MARGIN / 2,
-            )
-            if not_unwound:
-                logger.warning(
-                    "%d cancelled request(s) did not unwind within %.1fs — proceeding with shutdown; "
-                    "these tasks may keep the process alive until ECS force-kills it (SIGKILL)",
-                    len(not_unwound),
-                    _SHUTDOWN_CLEANUP_MARGIN / 2,
-                )
+            # Let cancellation propagate before we close the socket. The
+            # request pipeline is await-based I/O, so this unwinds promptly;
+            # we bound it by the reserved cleanup margin purely so a slow
+            # unwind can't eat into the ECS window, and move on regardless.
+            # ECS SIGKILL is the ultimate backstop.
+            await asyncio.wait(still_pending, timeout=_SHUTDOWN_CLEANUP_MARGIN)
         else:
             logger.info("All in-flight requests drained cleanly")
-
-    def in_flight_tasks(self) -> set[asyncio.Task[Any]]:
-        """Return a snapshot of the currently tracked in-flight tasks.
-
-        After ``stop()`` this is the set of requests that were cancelled but
-        did not unwind in time. The entrypoint uses it to cancel and
-        bounded-gather them under its own control, so asyncio.run()'s final
-        (unbounded) task cleanup has nothing left to hang on.
-        """
-        return set(self._in_flight)
 
     async def is_connected(self) -> bool:
         """Return whether the Socket Mode WebSocket is currently connected.
