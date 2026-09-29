@@ -215,8 +215,8 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run tests from 13.1 — all must pass
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
 
-- [ ] 14. Implement graceful shutdown
-  - [ ] 14.1 Implement graceful shutdown signal handling
+- [x] 14. Implement graceful shutdown
+  - [x] 14.1 Implement graceful shutdown signal handling
     - Register SIGTERM and SIGINT handlers via asyncio event loop
     - Drain in-flight requests before disconnecting WebSocket
     - Complete or abandon in-flight questions within ECS stop timeout (30s)

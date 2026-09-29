@@ -42,6 +42,12 @@ _ACTION_GROUP_PROGRESS: dict[str, str] = {
 }
 _PROGRESS_DEFAULT = "⏳ Searching..."
 
+# Graceful shutdown: how long to wait for in-flight requests to finish
+# before disconnecting the WebSocket. ECS sends SIGTERM with a default
+# 30-second stop timeout before force-killing the task, so we bound the
+# drain to that window (Requirements 13.1, 13.2).
+_SHUTDOWN_DRAIN_TIMEOUT = 30.0  # seconds
+
 
 class SlackAgentApp:
     """Main application using Slack Bolt with async Socket Mode.
@@ -88,6 +94,15 @@ class SlackAgentApp:
         self.app: Any | None = None
         self.handler: Any | None = None
         self._bot_user_id: str | None = None
+        # In-flight request tracking for graceful shutdown. Each question
+        # being processed is registered here so stop() can drain them
+        # before disconnecting the WebSocket (Requirements 13.1, 13.2).
+        self._in_flight: set[asyncio.Task[Any]] = set()
+        # Once shutting down, new questions are refused so the drain set
+        # doesn't keep growing while we're trying to empty it.
+        self._shutting_down = False
+        # How long to wait for in-flight requests during shutdown.
+        self._shutdown_timeout = _SHUTDOWN_DRAIN_TIMEOUT
 
     # ------------------------------------------------------------------
     # Bot mention stripping
@@ -267,13 +282,45 @@ class SlackAgentApp:
         parsed = self.parse_event(event, bot_user_id)
         thread_ts = parsed.thread_ts or parsed.event_ts
         # parsed.event_ts is the user's message ts — the target for reactions.
-        await self._process_question(
-            parsed,
-            say=say,
-            client=client,
-            thread_ts=thread_ts,
-            reaction_ts=parsed.event_ts,
+        await self._run_tracked(
+            self._process_question(
+                parsed,
+                say=say,
+                client=client,
+                thread_ts=thread_ts,
+                reaction_ts=parsed.event_ts,
+            )
         )
+
+    # ------------------------------------------------------------------
+    # In-flight request tracking (graceful shutdown — Requirements 13.1, 13.2)
+    # ------------------------------------------------------------------
+
+    async def _run_tracked(self, coro: Any) -> None:
+        """Run a question-processing coroutine as a tracked in-flight task.
+
+        Registering the work as a task (rather than awaiting the coroutine
+        inline) lets ``stop()`` await outstanding requests during a graceful
+        shutdown. The caller still awaits completion here, so per-event
+        behavior is unchanged; the task is only a handle for the drain.
+
+        When the app is already shutting down, new work is refused: the
+        coroutine is closed without running so the drain set can't grow
+        while we're emptying it.
+        """
+        if self._shutting_down:
+            # Refuse new work during shutdown; close the coroutine so it
+            # doesn't emit a "coroutine was never awaited" warning.
+            coro.close()
+            logger.info("Refusing new request — shutdown in progress")
+            return
+
+        task = asyncio.ensure_future(coro)
+        self._in_flight.add(task)
+        try:
+            await task
+        finally:
+            self._in_flight.discard(task)
 
     # ------------------------------------------------------------------
     # Deduplication
@@ -588,7 +635,7 @@ class SlackAgentApp:
         if self._is_duplicate(command.get("trigger_id")):
             return
         parsed = self.parse_command(command)
-        await self._process_question(parsed, say=say, client=client)
+        await self._run_tracked(self._process_question(parsed, say=say, client=client))
 
     # ------------------------------------------------------------------
     # Session ID derivation
@@ -625,9 +672,55 @@ class SlackAgentApp:
         await self.handler.start_async()
 
     async def stop(self) -> None:
-        """Gracefully disconnect and drain in-flight requests."""
+        """Gracefully drain in-flight requests, then disconnect.
+
+        Ordering matters (Requirements 13.1, 13.2):
+
+        1. Mark the app as shutting down so no *new* questions are accepted
+           (``_run_tracked`` refuses them). This bounds the drain set.
+        2. Wait for outstanding in-flight requests to finish, up to
+           ``_shutdown_timeout`` seconds. ECS sends SIGTERM with a default
+           30-second stop timeout before force-killing the task, so we drain
+           within that window. Any requests still running when the timeout
+           expires are cancelled and abandoned.
+        3. Disconnect the WebSocket last, so in-flight questions can still
+           post their answers to Slack while draining.
+
+        Safe to call more than once (e.g. SIGTERM then SIGINT) — the drain
+        is idempotent and the WebSocket close is guarded.
+        """
+        self._shutting_down = True
+        await self._drain_in_flight()
+
         if self.handler is not None:
             await self.handler.close_async()
+
+    async def _drain_in_flight(self) -> None:
+        """Wait for in-flight requests to complete, bounded by the timeout.
+
+        Requests that don't finish within ``_shutdown_timeout`` are
+        cancelled so the process can exit before ECS force-kills it.
+        """
+        if not self._in_flight:
+            return
+
+        pending = set(self._in_flight)
+        logger.info("Draining %d in-flight request(s) before shutdown", len(pending))
+
+        _done, still_pending = await asyncio.wait(pending, timeout=self._shutdown_timeout)
+
+        if still_pending:
+            logger.warning(
+                "Shutdown timeout (%.0fs) reached — abandoning %d in-flight request(s)",
+                self._shutdown_timeout,
+                len(still_pending),
+            )
+            for task in still_pending:
+                task.cancel()
+            # Give cancelled tasks a moment to unwind so they don't leak.
+            await asyncio.gather(*still_pending, return_exceptions=True)
+        else:
+            logger.info("All in-flight requests drained cleanly")
 
     async def is_connected(self) -> bool:
         """Return whether the Socket Mode WebSocket is currently connected.

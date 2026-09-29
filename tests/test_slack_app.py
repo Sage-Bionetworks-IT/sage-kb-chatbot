@@ -16,6 +16,7 @@ Validates: Requirements 1.1, 1.2, 1.3, 2.2, 3.7, 9.1, 9.2, 10.3, 10.4, 10.5, 10.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1235,3 +1236,159 @@ class TestProgressiveUX:
 
         # Answer still delivered despite reaction failures.
         assert "PTO is 20 days" in _delivered_text(say, client)
+
+
+# -------------------------------------------------------
+# Unit tests: Graceful shutdown (task 14)
+# -------------------------------------------------------
+
+
+class TestGracefulShutdown:
+    """Requirements 13.1, 13.2: drain in-flight requests before disconnecting.
+
+    stop() must:
+      * wait for outstanding requests to finish before closing the socket,
+      * close the WebSocket only after the drain,
+      * bound the drain by _shutdown_timeout, cancelling stragglers,
+      * refuse new requests once shutting down,
+      * remain safe when there is nothing in flight or no handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stop_waits_for_in_flight_then_closes_socket(self, mock_auth_check) -> None:
+        """An in-flight request finishes before the WebSocket is closed."""
+        order: list[str] = []
+        release = asyncio.Event()
+
+        async def slow_ask(question: str, session_id: str, on_progress=None) -> AgentResponse:
+            await release.wait()
+            order.append("ask_done")
+            return AgentResponse(answer="done", source_urls=[], tool_calls_made=["t"], latency_ms=1.0)
+
+        orch = AsyncMock()
+        orch.ask = AsyncMock(side_effect=slow_ask)
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+
+        # A mock handler whose close records ordering relative to the drain.
+        async def close_async() -> None:
+            order.append("socket_closed")
+
+        app.handler = MagicMock()
+        app.handler.close_async = AsyncMock(side_effect=close_async)
+
+        say = AsyncMock()
+        client = _make_client()
+
+        # Start processing a question; it blocks inside slow_ask.
+        request = asyncio.create_task(app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID"))
+        # Let the request reach the blocking await and register as in-flight.
+        while not app._in_flight:
+            await asyncio.sleep(0)
+        assert len(app._in_flight) == 1
+
+        # Begin shutdown; it must not close the socket while the request runs.
+        stop_task = asyncio.create_task(app.stop())
+        await asyncio.sleep(0)
+        assert "socket_closed" not in order, "socket closed before draining in-flight request"
+
+        # Release the request; the drain should complete, then close the socket.
+        release.set()
+        await asyncio.gather(request, stop_task)
+
+        assert order == ["ask_done", "socket_closed"]
+        app.handler.close_async.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_requests_exceeding_timeout(self, mock_auth_check) -> None:
+        """A request that outlasts the drain timeout is cancelled, then socket closes."""
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def hang_ask(question: str, session_id: str, on_progress=None) -> AgentResponse:
+            started.set()
+            try:
+                await asyncio.sleep(3600)  # would hang forever
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return AgentResponse(answer="never", source_urls=[], tool_calls_made=["t"], latency_ms=1.0)
+
+        orch = AsyncMock()
+        orch.ask = AsyncMock(side_effect=hang_ask)
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        # Tiny timeout so the test doesn't actually wait 30s.
+        app._shutdown_timeout = 0.05
+        app.handler = MagicMock()
+        app.handler.close_async = AsyncMock()
+
+        say = AsyncMock()
+        client = _make_client()
+
+        request = asyncio.create_task(app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID"))
+        await started.wait()
+        assert len(app._in_flight) == 1
+
+        await app.stop()
+
+        # The straggler was cancelled and the socket still closed.
+        assert cancelled.is_set()
+        app.handler.close_async.assert_awaited_once()
+        # The request task itself unwinds via cancellation.
+        with pytest.raises(asyncio.CancelledError):
+            await request
+
+    @pytest.mark.asyncio
+    async def test_new_requests_refused_during_shutdown(self, mock_auth_check) -> None:
+        """Once shutting down, a new event is refused and never reaches the orchestrator."""
+        orch = AsyncMock()
+        orch.ask = AsyncMock(
+            return_value=AgentResponse(answer="A", source_urls=[], tool_calls_made=["t"], latency_ms=1.0)
+        )
+        limiter = MagicMock(spec=RateLimiter)
+        limiter.check.return_value = (True, None)
+        app = _make_app(orchestrator=orch, rate_limiter=limiter, auth_check=mock_auth_check)
+        app.handler = MagicMock()
+        app.handler.close_async = AsyncMock()
+
+        await app.stop()  # flips _shutting_down and drains (nothing in flight)
+
+        say = AsyncMock()
+        client = _make_client()
+        await app.handle_event(_pto_event(), say=say, client=client, bot_user_id="UBOTID")
+
+        orch.ask.assert_not_called()
+        assert not app._in_flight
+
+    @pytest.mark.asyncio
+    async def test_stop_with_no_in_flight_closes_socket(self, mock_auth_check) -> None:
+        """stop() with nothing in flight simply closes the socket."""
+        app = _make_app(auth_check=mock_auth_check)
+        app.handler = MagicMock()
+        app.handler.close_async = AsyncMock()
+
+        await app.stop()
+
+        app.handler.close_async.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_with_no_handler_is_safe(self, mock_auth_check) -> None:
+        """stop() before start() (no handler) does not raise."""
+        app = _make_app(auth_check=mock_auth_check)
+        assert app.handler is None
+        await app.stop()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_stop_is_idempotent(self, mock_auth_check) -> None:
+        """Calling stop() twice (SIGTERM then SIGINT) is safe."""
+        app = _make_app(auth_check=mock_auth_check)
+        app.handler = MagicMock()
+        app.handler.close_async = AsyncMock()
+
+        await app.stop()
+        await app.stop()
+
+        assert app.handler.close_async.await_count == 2
