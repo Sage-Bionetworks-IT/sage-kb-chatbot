@@ -2,13 +2,16 @@
 
 ## Introduction
 
-The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives questions via Slack and uses an Amazon Bedrock Agent to route them to the Atlassian Confluence/Jira knowledge base via Rovo MCP Server, synthesize results, and return cited answers. The system uses Slack Socket Mode for secure, endpoint-free event reception and runs as a single ECS Fargate service.
+The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives questions via Slack and uses an Amazon Bedrock Agent to route them to internal knowledge sources — the Atlassian Confluence/Jira knowledge base via Rovo MCP Server, and the internal corporate knowledge base stored in Google Drive — synthesize results across both, and return a single cited answer. The system uses Slack Socket Mode for secure, endpoint-free event reception and runs as a single ECS Fargate service.
+
+The corporate knowledge base is authored on a *new* Google Sites site, but its authoritative content lives in Google Drive files (Docs, Sheets, Slides, PDFs) organized under a shared folder tree. Because new Google Sites do not expose page body text to the Drive API, the bot searches the underlying Drive files rather than the rendered Site pages.
 
 ## Glossary
 
 - **Socket_Mode_App**: The Slack Bolt application that maintains a WebSocket connection to Slack, receives events, and dispatches questions for processing.
 - **Bedrock_Orchestrator**: The component that interacts with the Amazon Bedrock Agent using the return control pattern to route questions, execute tool calls, and obtain synthesized answers.
 - **Rovo_Backend**: The backend that queries Atlassian's Rovo MCP Server to search and summarize Confluence and Jira content.
+- **GoogleDrive_Backend**: The backend that searches the internal corporate knowledge base stored in Google Drive files, authenticating as a GCP service account using domain-wide delegation to impersonate a dedicated Workspace user, and calling the Drive API (`files.list`) directly.
 - **Health_Check_Server**: A lightweight HTTP server that exposes a health endpoint for ECS container health checks.
 - **Rate_Limiter**: An in-memory component that enforces per-user and global rate limits using sliding window counters.
 - **Audit_Logger**: The structured logging component that emits JSON logs for operational visibility and audit trail.
@@ -80,7 +83,7 @@ The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives
 4. THE Bedrock_Orchestrator SHALL enforce a 30-second total timeout for the entire ask() call.
 5. WHEN the same action group and parameters are requested again within the same Return_Control_Loop, THE Bedrock_Orchestrator SHALL skip the duplicate tool call.
 6. WHEN any guardrail (max iterations, timeout, duplicate detection) is triggered, THE Bedrock_Orchestrator SHALL return the best partial answer available or a "couldn't complete" message.
-7. THE Bedrock_Orchestrator SHALL map action group names to the correct backend implementations (Rovo_Backend for SearchConfluenceJira).
+7. THE Bedrock_Orchestrator SHALL map action group names to the correct backend implementations (Rovo_Backend for SearchConfluenceJira, GoogleDrive_Backend for SearchGoogleWorkspace).
 
 ### Requirement 6: Session Management
 
@@ -102,6 +105,21 @@ The Slack Agent Router is a chatbot for Sage Bionetworks employees that receives
 2. WHEN the Rovo MCP Server returns results, THE Rovo_Backend SHALL parse the MCP response and return a BackendResult with answer text and source URLs.
 3. IF the Rovo MCP Server returns an authentication error, THEN THE Rovo_Backend SHALL return a BackendResult with success=False and a descriptive error message.
 4. IF the Rovo MCP Server times out or returns an HTTP error, THEN THE Rovo_Backend SHALL return a BackendResult with success=False and a descriptive error message.
+
+### Requirement 8: Google Drive Backend
+
+**User Story:** As a Sage Bionetworks employee, I want the bot to search our internal corporate knowledge base in Google Drive, so that answers include content from our Google Workspace site alongside Confluence and Jira.
+
+#### Acceptance Criteria
+
+1. WHEN the Bedrock Agent requests a SearchGoogleWorkspace tool call, THE GoogleDrive_Backend SHALL query the Google Drive API `files.list` endpoint using a `fullText contains` query built from the requested search terms.
+2. WHEN the Drive API returns matching files, THE GoogleDrive_Backend SHALL parse the response and return a BackendResult with success=True, answer text derived from each file's title and content snippet, and source_urls containing each file's `webViewLink`.
+3. THE GoogleDrive_Backend SHALL authenticate as a GCP service account using domain-wide delegation to impersonate a dedicated Workspace user, requesting only the `drive.readonly` scope.
+4. THE GoogleDrive_Backend SHALL confine its search to content the impersonated Workspace user can access (the shared corporate KB folder tree, including nested subfolders), relying on Drive sharing for scope rather than an explicit folder-id clause.
+5. IF the Drive API returns an authentication or delegation error, THEN THE GoogleDrive_Backend SHALL return a BackendResult with success=False and a descriptive error message.
+6. IF the Drive API times out, returns an HTTP 5xx error, or is rate-limited, THEN THE GoogleDrive_Backend SHALL return a BackendResult with success=False and a descriptive error message.
+7. WHEN the Drive API returns no matching files, THE GoogleDrive_Backend SHALL return a BackendResult with success=True and an answer indicating no matching documents were found.
+8. WHEN results from the GoogleDrive_Backend and Rovo_Backend are both available, THE Bedrock_Orchestrator SHALL provide both to the Bedrock Agent so it can synthesize a single answer that blends and cites both sources.
 
 ### Requirement 9: Answer Formatting
 
