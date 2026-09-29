@@ -259,63 +259,65 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Config/secrets: add `google_impersonate_user` config and the `google_service_account_key` secret; document in `config.yaml.example`; add `google_service_account_key` to the required secret keys in `main.py` (`_REQUIRED_SECRET_KEYS`) and load the JSON for the backend (MVP credential path)
     - _Requirements: 5.7, 8.8_
 
-- [ ] 16. Implement graceful shutdown
-  - [ ] 16.1 Implement graceful shutdown signal handling
+- [ ] 16. Implement CDK infrastructure stack
+  - [x] 16.1 Create CDK app and stacks (infra repo: sage-kb-chatbot-infra)
+    - CDK Python app in `sage-kb-chatbot-infra` with Network, ECS, Service, BedrockAgent, and Monitoring stacks
+    - ECS Fargate service defined at 256 CPU / 512 MB, single task
+    - _Requirements: 14.1, 14.4_
+
+  - [x] 16.2 Configure IAM, secrets, and logging (infra repo: sage-kb-chatbot-infra)
+    - ECS task role granted secretsmanager:GetSecretValue (scoped to the app secret) and bedrock:InvokeAgent; logging to CloudWatch
+    - App reads a single Secrets Manager secret (`SLACK_AGENT_ROUTER_SECRET_ID`) at runtime containing the Slack tokens and Atlassian API token; Bedrock Agent IDs passed as env vars
+    - _Requirements: 14.2, 14.3, 14.5_
+
+  - [ ] 16.3 Re-enable the ECS container health check (infra repo: sage-kb-chatbot-infra)
+    - The `container_healthcheck` block in `app.py` is currently commented out ("health check endpoint not implemented yet"); the /health endpoint is now implemented (task 13), so re-enable it against port 8080
+    - _Requirements: 14.4_
+
+  - [ ] 16.4 Add the SearchGoogleWorkspace action group to the Bedrock Agent (infra repo: sage-kb-chatbot-infra)
+    - In `bedrock_agent_stack.py`, add a second `RETURN_CONTROL` action group `SearchGoogleWorkspace` with a `find_content` function (single `query` string parameter), mirroring `SearchConfluenceJira`
+    - Update the agent `instruction` so it knows to use `SearchGoogleWorkspace` for internal corporate knowledge-base questions, and to synthesize a single blended, cited answer when both sources return results
+    - Provision the Google service-account key secret and the `google_impersonate_user` value for the ECS service
+    - Update infra unit tests to assert both action groups are configured
+    - _Requirements: 5.7, 8.3, 8.8, 14.5_
+
+- [ ] 17. Implement graceful shutdown
+  - [ ] 17.1 Implement graceful shutdown signal handling
     - Register SIGTERM and SIGINT handlers via asyncio event loop
     - Drain in-flight requests before disconnecting WebSocket
     - Complete or abandon in-flight questions within ECS stop timeout (30s)
     - _Requirements: 13.1, 13.2_
 
-- [ ] 17. Checkpoint - Ensure all tests pass
+- [ ] 18. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 18. Implement integration tests
-  - [ ] 18.1 Write integration test for full question-to-answer flow
+- [ ] 19. Implement integration tests
+  - [ ] 19.1 Write integration test for full question-to-answer flow
     - Test the complete pipeline: ParsedQuestion → orchestrator.ask() → formatted Slack response
     - Mock Bedrock Agent API responses (return control loop with tool requests and final answer)
     - Mock backend HTTP calls (Rovo MCP) with realistic response fixtures
     - Verify progressive UX calls are made in correct order (reaction → placeholder → update → final)
     - _Requirements: 5.1, 5.2, 9.1, 4.1, 4.2, 4.3, 4.4, 4.5_
 
-  - [ ] 18.2 Write integration test for backend error scenarios
+  - [ ] 19.2 Write integration test for backend error scenarios
     - Test single backend timeout with other backend succeeding — verify partial answer is returned
     - Test all backends failing — verify "unable to find an answer" message is posted
     - Test Bedrock Agent failure after successful tool calls — verify fallback response with raw outputs
     - Test blended synthesis: both Rovo and Google Drive return results — verify the agent receives both tool outputs (mock Drive `files.list` alongside Rovo MCP fixtures)
     - _Requirements: 10.2, 10.3, 10.6, 10.7, 8.8_
 
-  - [ ] 18.3 Write integration test for rate limiting and authorization flow
+  - [ ] 19.3 Write integration test for rate limiting and authorization flow
     - Test authorized user flow end-to-end: event → dedup → auth → rate limit → orchestrator → response
     - Test unauthorized user is rejected with ephemeral message before any backend calls
     - Test rate-limited user receives ephemeral message and no backend calls are made
     - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.7_
 
-  - [ ] 18.4 Write integration test for health check endpoint
+  - [ ] 19.4 Write integration test for health check endpoint
     - Start the aiohttp health server and make real HTTP requests to /health
     - Test healthy response when WebSocket mock reports connected
     - Test unhealthy response when WebSocket mock reports disconnected
     - Test backend health timeout handling with slow mock backends
     - _Requirements: 11.1, 11.2, 11.3, 11.5_
-
-- [ ] 19. Implement CDK infrastructure stack
-  - [ ] 19.1 Create CDK app and stack
-    - Create `infra/` directory with CDK Python app
-    - Define ECS Fargate service: 0.25 vCPU, 0.5 GB memory, single task
-    - Configure container health check using /health endpoint on port 8080
-    - _Requirements: 14.1, 14.4_
-
-  - [ ] 19.2 Configure IAM, secrets, and logging
-    - Define least-privilege ECS task role: secretsmanager:GetSecretValue, bedrock:InvokeAgent, logs:PutLogEvents
-    - Define Secrets Manager secrets for Slack tokens, Atlassian API token, Bedrock Agent IDs, and the Google service-account key (MVP)
-    - Define CloudWatch Log Group at /ecs/slack-agent-router with 90-day retention
-    - _Requirements: 14.2, 14.3, 14.5_
-
-  - [ ] 19.3 Add the SearchGoogleWorkspace action group to the Bedrock Agent (infra repo: sage-kb-chatbot-infra)
-    - In `bedrock_agent_stack.py`, add a second `RETURN_CONTROL` action group `SearchGoogleWorkspace` with a `find_content` function (single `query` string parameter), mirroring `SearchConfluenceJira`
-    - Update the agent `instruction` so it knows to use `SearchGoogleWorkspace` for internal corporate knowledge-base questions, and to synthesize a single blended, cited answer when both sources return results
-    - Provision the Google service-account key secret and the `google_impersonate_user` value for the ECS service
-    - Update infra unit tests to assert both action groups are configured
-    - _Requirements: 5.7, 8.3, 8.8, 14.5_
 
 - [ ] 20. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
