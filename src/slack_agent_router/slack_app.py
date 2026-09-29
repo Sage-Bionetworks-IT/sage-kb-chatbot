@@ -327,8 +327,24 @@ class SlackAgentApp:
 
         task = asyncio.ensure_future(coro)
         self._in_flight.add(task)
-        task.add_done_callback(self._in_flight.discard)
+        task.add_done_callback(self._on_task_done)
         return task
+
+    def _on_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Remove a finished task and surface any non-cancellation error.
+
+        Callers (the mention and DM handlers) discard the task returned by
+        ``_track``, so without this the task's exception is never observed.
+        That both hides real failures (e.g. ``auth_test()`` raising) and
+        triggers asyncio's "Task exception was never retrieved" warning.
+        Retrieving and logging the exception here fixes both.
+        """
+        self._in_flight.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("In-flight task failed: %s", exc, exc_info=exc)
 
     # ------------------------------------------------------------------
     # Deduplication
@@ -764,14 +780,21 @@ class SlackAgentApp:
             # bound it so a task that swallows cancellation can't eat the whole
             # cleanup margin and leave no time to close the WebSocket. We only
             # need half the margin here; the rest is reserved for close_async().
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*still_pending, return_exceptions=True),
-                    timeout=_SHUTDOWN_CLEANUP_MARGIN / 2,
-                )
-            except TimeoutError:
+            #
+            # Use asyncio.wait (not wait_for) for a true hard bound: on
+            # Python 3.12 wait_for cancels its awaitable at the deadline and
+            # then *blocks until that cancellation completes*, so a task that
+            # suppresses CancelledError could keep us here indefinitely. wait
+            # returns at the timeout regardless, leaving any non-cooperative
+            # tasks for process exit to reap so shutdown can close the socket.
+            _unwound, not_unwound = await asyncio.wait(
+                still_pending,
+                timeout=_SHUTDOWN_CLEANUP_MARGIN / 2,
+            )
+            if not_unwound:
                 logger.warning(
-                    "Cancelled request(s) did not unwind within %.1fs — leaving them to be reaped by process exit",
+                    "%d cancelled request(s) did not unwind within %.1fs — leaving them to be reaped by process exit",
+                    len(not_unwound),
                     _SHUTDOWN_CLEANUP_MARGIN / 2,
                 )
         else:
