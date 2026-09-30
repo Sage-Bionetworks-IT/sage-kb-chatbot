@@ -258,6 +258,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Orchestrator: add `google_drive_backend` constructor param and register `SearchGoogleWorkspace` → GoogleDrive_Backend in the action-group→backend map; extend the Property 8 mapping test to cover it
     - Slack app: add a progress message for the new action group ("⏳ Searching Google Drive...") in the action-group→message map
     - `main.py`: construct `GoogleDriveBackend`, add it to the backends list, and pass it to the orchestrator
+    - Config/secrets: add required `google_impersonate_user` and `google_root_folder_id` config values plus the `google_service_account_key` secret; document them in `config.yaml.example`; add `google_service_account_key` to the required secret keys in `main.py` (`_REQUIRED_SECRET_KEYS`) and load the JSON for the backend (MVP credential path)
     - Config/secrets: add `google_impersonate_user` config and the `google_service_account_key` secret; document in `config.yaml.example`; add `google_service_account_key` to the required secret keys in `main.py` (`_REQUIRED_SECRET_KEYS`) and load the JSON for the backend (MVP credential path)
     - _Requirements: 5.7, 8.8_
 
@@ -279,7 +280,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
   - [ ] 16.4 Add the SearchGoogleWorkspace action group to the Bedrock Agent (infra repo: sage-kb-chatbot-infra)
     - In `bedrock_agent_stack.py`, add a second `RETURN_CONTROL` action group `SearchGoogleWorkspace` with a `find_content` function (single `query` string parameter), mirroring `SearchConfluenceJira`
     - Update the agent `instruction` so it knows to use `SearchGoogleWorkspace` for internal corporate knowledge-base questions, and to synthesize a single blended, cited answer when both sources return results
-    - Provision the Google service-account key secret and the `google_impersonate_user` value for the ECS service
+    - Provision the Google service-account key secret plus the `google_impersonate_user` and required `google_root_folder_id` values for the ECS service
     - Update infra unit tests to assert both action groups are configured
     - _Requirements: 5.7, 8.3, 8.8, 14.5_
 
