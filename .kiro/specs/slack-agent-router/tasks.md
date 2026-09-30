@@ -236,21 +236,23 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - _Requirements: 8.1_
 
   - [ ] 15.2 Write tests for GoogleDriveBackend (RED)
-    - **Property 11: Google Drive response parsing completeness** — for any valid `files.list` response, the backend produces a BackendResult with success=True, answer text derived from each file's title and snippet, and source_urls containing every file's `webViewLink`
-    - Unit tests: `fullText contains` query is built and single quotes escaped; auth/delegation failure returns BackendResult with success=False; timeout returns success=False; HTTP 5xx / rate-limit returns success=False; empty result set returns success=True with a "no matching documents" answer; `health_check` returns a boolean
-    - Mock the Drive API client (`files().list().execute()`) and `google-auth` delegated credentials — no real network calls
+    - **Property 11: Google Drive content-fetch completeness** — for any valid `files.list` result paired with per-file export/download content, the backend produces a BackendResult with success=True, an `answer` that includes each matched file's title followed by its retrieved (bounded) content excerpt, and `source_urls` containing every file's `webViewLink`
+    - **Property 11b: excerpt byte bound** — for any file content of arbitrary length, the excerpt included in the answer for that file never exceeds `max_content_bytes_per_file`
+    - Unit tests: `fullText contains` query is built with the `in parents` allowlist conjunction and single quotes escaped; Google-native files are fetched via `files.export(mimeType="text/plain")` and binary/PDF files via `files.get(alt="media")`; auth/delegation failure returns success=False; timeout (list or fetch phase) returns success=False; HTTP 5xx / rate-limit returns success=False; a single file's export/download failure is skipped (file still listed by title + `webViewLink` with a "content unavailable" note) while other files succeed; empty result set returns success=True with a "no matching documents" answer; `health_check` returns a boolean
+    - Mock the Drive API client (`files().list().execute()`, `files().export().execute()` / `files().get_media()`) and `google-auth` delegated credentials — no real network calls
     - Tests should fail initially (no implementation yet)
-    - **Validates: Requirements 8.1, 8.2, 8.5, 8.6, 8.7**
+    - **Validates: Requirements 8.1, 8.2, 8.3, 8.6, 8.7, 8.8, 8.9**
 
   - [ ] 15.3 Implement GoogleDriveBackend (GREEN)
     - Create `src/slack_agent_router/backends/google_drive.py`
-    - Build service-account credentials from `service_account_info` (Secrets Manager) or ambient credentials (ECS task role / workload identity), then `.with_subject(impersonate_user)` to impersonate the dedicated Workspace user with the `drive.readonly` scope
-    - Implement `query()`: build `files.list` with `q="fullText contains '<escaped terms>'"`, `fields="files(id,name,mimeType,modifiedTime,webViewLink)"`, `pageSize=max_results`, `spaces="drive"`, `includeItemsFromAllDrives=true`, `supportsAllDrives=true`; run the sync client call via `asyncio.to_thread` wrapped in `asyncio.wait_for(timeout_seconds)`; parse into a BackendResult (answer from title + snippet, source_urls from `webViewLink`)
-    - Rely on Drive sharing for scope (no `in parents` clause) so nested subfolders are covered
-    - Handle auth/delegation, timeout, HTTP 5xx, and rate-limit errors → BackendResult(success=False, …)
+    - Build parsed service-account credentials from `service_account_info` (required, loaded from Secrets Manager), then `.with_subject(impersonate_user)` to impersonate the dedicated Workspace user with the `drive.readonly` scope. **Require `service_account_info` for the MVP** — raise a clear configuration error if it is missing rather than falling back to ambient/ADC credentials. AWS external-account credentials returned by ADC (ECS task role / workload identity federation) do not implement `service_account.Credentials.with_subject()`, so the keyless path cannot perform domain-wide delegation as written; defer it until a supported DWD signing/token flow is designed
+    - Implement `query()` **phase 1 (find)**: build `files.list` with `q="fullText contains '<escaped terms>' and (<in-parents disjunction over the allowlisted folder set>)"`, `fields="files(id,name,mimeType,modifiedTime,webViewLink)"`, `pageSize=max_results`, `spaces="drive"`, `includeItemsFromAllDrives=true`, `supportsAllDrives=true`; batch the disjunction across calls if it exceeds Drive's query-length limit
+    - Implement `query()` **phase 2 (fetch bounded content)**: for each matched file, export Google-native types (Docs/Sheets/Slides) to `text/plain` via `files.export`, download binary/PDF types via `files.get(alt="media")` (reducing PDFs to text), and truncate each excerpt to `max_content_bytes_per_file`; run all sync client calls via `asyncio.to_thread`, per-file fetches concurrently (`asyncio.gather`), wrapped in `asyncio.wait_for(timeout_seconds)`; compose the BackendResult (answer = title + content excerpt per file, source_urls from `webViewLink`)
+    - Confine both the search and the content fetch/export to the enforced `root_folder_id` allowlist (resolved/cached descendant folder set); never issue a bare `fullText contains` query without the `in parents` clause
+    - Handle auth/delegation, timeout, HTTP 5xx, and rate-limit errors → BackendResult(success=False, …); skip-and-continue on a single file's fetch/export failure rather than failing the whole request
     - Implement `health_check()` with a minimal `files.list` (`pageSize=1`)
     - Run tests from 15.2 — all must pass
-    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7_
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9_
 
   - [ ] 15.4 Wire GoogleDriveBackend into orchestrator, Slack app, and entrypoint (GREEN)
     - Orchestrator: add `google_drive_backend` constructor param and register `SearchGoogleWorkspace` → GoogleDrive_Backend in the action-group→backend map; extend the Property 8 mapping test to cover it
@@ -303,7 +305,7 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Test single backend timeout with other backend succeeding — verify partial answer is returned
     - Test all backends failing — verify "unable to find an answer" message is posted
     - Test Bedrock Agent failure after successful tool calls — verify fallback response with raw outputs
-    - Test blended synthesis: both Rovo and Google Drive return results — verify the agent receives both tool outputs (mock Drive `files.list` alongside Rovo MCP fixtures)
+    - Test blended synthesis: both Rovo and Google Drive return results — verify the agent receives both tool outputs (mock Drive `files.list` plus per-file `files.export` / `files.get(alt="media")` content alongside Rovo MCP fixtures)
     - _Requirements: 10.2, 10.3, 10.6, 10.7, 8.8_
 
   - [ ] 19.3 Write integration test for rate limiting and authorization flow

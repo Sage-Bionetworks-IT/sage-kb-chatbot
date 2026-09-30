@@ -11,7 +11,7 @@ The corporate knowledge base is authored on a *new* Google Sites site, but its a
 - **Socket_Mode_App**: The Slack Bolt application that maintains a WebSocket connection to Slack, receives events, and dispatches questions for processing.
 - **Bedrock_Orchestrator**: The component that interacts with the Amazon Bedrock Agent using the return control pattern to route questions, execute tool calls, and obtain synthesized answers.
 - **Rovo_Backend**: The backend that queries Atlassian's Rovo MCP Server to search and summarize Confluence and Jira content.
-- **GoogleDrive_Backend**: The backend that searches the internal corporate knowledge base stored in Google Drive files, authenticating as a GCP service account using domain-wide delegation to impersonate a dedicated Workspace user, and calling the Drive API (`files.list`) directly.
+- **GoogleDrive_Backend**: The backend that searches the internal corporate knowledge base stored in Google Drive files, authenticating as a GCP service account using domain-wide delegation to impersonate a dedicated Workspace user, and calling the Drive API directly — `files.list` to find matching files, then `files.export` / `files.get?alt=media` to retrieve a bounded excerpt of each match's content.
 - **Health_Check_Server**: A lightweight HTTP server that exposes a health endpoint for ECS container health checks.
 - **Rate_Limiter**: An in-memory component that enforces per-user and global rate limits using sliding window counters.
 - **Audit_Logger**: The structured logging component that emits JSON logs for operational visibility and audit trail.
@@ -112,14 +112,16 @@ The corporate knowledge base is authored on a *new* Google Sites site, but its a
 
 #### Acceptance Criteria
 
-1. WHEN the Bedrock Agent requests a SearchGoogleWorkspace tool call, THE GoogleDrive_Backend SHALL query the Google Drive API `files.list` endpoint using a `fullText contains` query built from the requested search terms.
-2. WHEN the Drive API returns matching files, THE GoogleDrive_Backend SHALL parse the response and return a BackendResult with success=True, answer text derived from each file's title and content snippet, and source_urls containing each file's `webViewLink`.
-3. THE GoogleDrive_Backend SHALL authenticate as a GCP service account using domain-wide delegation to impersonate a dedicated Workspace user, requesting only the `drive.readonly` scope.
-4. THE GoogleDrive_Backend SHALL confine its search to content the impersonated Workspace user can access (the shared corporate KB folder tree, including nested subfolders), relying on Drive sharing for scope rather than an explicit folder-id clause.
-5. IF the Drive API returns an authentication or delegation error, THEN THE GoogleDrive_Backend SHALL return a BackendResult with success=False and a descriptive error message.
-6. IF the Drive API times out, returns an HTTP 5xx error, or is rate-limited, THEN THE GoogleDrive_Backend SHALL return a BackendResult with success=False and a descriptive error message.
-7. WHEN the Drive API returns no matching files, THE GoogleDrive_Backend SHALL return a BackendResult with success=True and an answer indicating no matching documents were found.
-8. WHEN results from the GoogleDrive_Backend and Rovo_Backend are both available, THE Bedrock_Orchestrator SHALL provide both to the Bedrock Agent so it can synthesize a single answer that blends and cites both sources.
+1. WHEN the Bedrock Agent requests a SearchGoogleWorkspace tool call, THE GoogleDrive_Backend SHALL identify matching files by querying the Google Drive API `files.list` endpoint with a `fullText contains` query built from the requested search terms, conjoined with an `in parents` allowlist over the resolved KB folder tree.
+2. WHEN `files.list` returns matching files, THE GoogleDrive_Backend SHALL, for each matched file up to the configured maximum, retrieve a bounded excerpt of the file's text content — exporting Google-native files (Docs, Sheets, Slides) to `text/plain` via `files.export` and downloading binary files (PDFs, etc.) via `files.get` with `alt=media` — truncating each excerpt to a configured byte cap so total fetched content stays bounded. `files.list` returns metadata only and has no matching-content or snippet field, so a separate content fetch/export step is required.
+3. WHEN it has retrieved file excerpts, THE GoogleDrive_Backend SHALL return a BackendResult with success=True, `answer` text composed of each file's title followed by its retrieved content excerpt, and `source_urls` containing each file's `webViewLink`, so the Bedrock Agent has document content to synthesize and cite.
+4. THE GoogleDrive_Backend SHALL authenticate as a GCP service account using domain-wide delegation to impersonate a dedicated Workspace user, requesting only the `drive.readonly` scope (which also permits `files.export` and media download).
+5. THE GoogleDrive_Backend SHALL confine both its `files.list` search and its content fetch/export to files under the enforced `root_folder_id` KB folder-tree allowlist (including nested subfolders), so results are hard-confined to the KB tree regardless of anything else the impersonated user can access.
+6. IF the Drive API returns an authentication or delegation error, THEN THE GoogleDrive_Backend SHALL return a BackendResult with success=False and a descriptive error message.
+7. IF the Drive API times out, returns an HTTP 5xx error, or is rate-limited during either the list or the content fetch/export step, THEN THE GoogleDrive_Backend SHALL return a BackendResult with success=False and a descriptive error message.
+8. IF an individual file's content fetch or export fails (unsupported type, export error, or per-file timeout), THEN THE GoogleDrive_Backend SHALL skip that file's excerpt, include the file by title and `webViewLink` with a note that its content was unavailable, and continue with the remaining files rather than failing the whole request.
+9. WHEN `files.list` returns no matching files, THE GoogleDrive_Backend SHALL return a BackendResult with success=True and an answer indicating no matching documents were found.
+10. WHEN results from the GoogleDrive_Backend and Rovo_Backend are both available, THE Bedrock_Orchestrator SHALL provide both to the Bedrock Agent so it can synthesize a single answer that blends and cites both sources.
 
 ### Requirement 9: Answer Formatting
 

@@ -62,8 +62,9 @@ sequenceDiagram
     RV-->>ECS: Confluence/Jira results
     ECS->>BA: InvokeAgent (returnControlInvocationResults)
     BA->>ECS: Return control (SearchGoogleWorkspace, params)
-    ECS->>GD: files.list (fullText contains, impersonated user)
-    GD-->>ECS: Matching Drive files (title, snippet, viewUrl)
+    ECS->>GD: files.list (fullText contains + in-parents allowlist)
+    GD->>GD: export/download bounded content per match
+    GD-->>ECS: Matching files (title, content excerpt, viewUrl)
     ECS->>BA: InvokeAgent (returnControlInvocationResults)
     BA-->>ECS: Final answer blending Confluence/Jira + Drive, with citations
     ECS->>S: chat.postMessage (synthesized answer)
@@ -353,7 +354,7 @@ class RovoMCPBackend:
 
 ### Component 4: Google Drive Backend
 
-**Purpose**: Searches the internal corporate knowledge base — Google Workspace content stored as Drive files (Docs, Sheets, Slides, PDFs) under a shared folder tree — and returns matching documents with snippets and source links. Used by the Bedrock Agent's `SearchGoogleWorkspace` action group.
+**Purpose**: Searches the internal corporate knowledge base — Google Workspace content stored as Drive files (Docs, Sheets, Slides, PDFs) under a shared folder tree — and returns matching documents with bounded content excerpts and source links. Used by the Bedrock Agent's `SearchGoogleWorkspace` action group.
 
 **Why the Drive API directly, not a Google MCP server?**
 
@@ -363,15 +364,41 @@ For an unattended backend, the robust, generally-available approach is a **GCP s
 
 The tradeoff: this backend is a thin Drive REST client rather than an MCP client. Everything downstream is identical — it returns a `BackendResult`, becomes the `SearchGoogleWorkspace` action group, and the Bedrock Agent blends its results with Atlassian into one cited answer.
 
-**Why `files.list` with `fullText contains`?**
+**Why `files.list` with `fullText contains` — and why it is not enough on its own**
 
-The Drive `files.list` query language supports `fullText contains '<terms>'`, which matches the title *and* body text of Docs/Sheets/Slides/PDFs. Each returned file provides `id`, `name`, `mimeType`, `modifiedTime`, and a `webViewLink` — the user-facing URL used for citations.
+The Drive `files.list` query language supports `fullText contains '<terms>'`, which matches against the title *and* body text of Docs/Sheets/Slides/PDFs. That makes it the right tool to *find* which files are relevant. But `files.list` is a metadata endpoint: each returned file provides only `id`, `name`, `mimeType`, `modifiedTime`, and a `webViewLink`. The Drive v3 File resource has **no matching-content, highlight, or snippet field**, and the `fields` mask above returns metadata only — there is no field that yields the passage that matched the query.
+
+So `files.list` alone cannot produce a title-plus-excerpt answer, and it gives the Bedrock Agent nothing but filenames to synthesize from. The backend therefore runs in **two phases**:
+
+1. **Find** — `files.list` with `fullText contains` (conjoined with the `in parents` allowlist below) returns the set of matching files and their metadata.
+2. **Fetch bounded content** — for each matched file (up to `max_results`), the backend retrieves a truncated text excerpt of the file's actual content:
+   - **Google-native files** (Docs, Sheets, Slides) are exported to `text/plain` via `files.export(fileId, mimeType="text/plain")`.
+   - **Binary files** (PDFs and other uploaded blobs) are downloaded via `files.get(fileId, alt="media")`; PDFs are reduced to text as needed.
+   - Each excerpt is capped at a configured byte limit (`max_content_bytes_per_file`) so total fetched content — and the Bedrock context it feeds — stays bounded. Excerpts are requested with `Range`/streaming where the client supports it so oversized files are not fully downloaded.
+
+The `answer` is then composed of each file's title followed by its content excerpt, and `source_urls` is the list of `webViewLink` values. This is the content Bedrock synthesizes and cites. The read-only Drive scope (`drive.readonly`) already permits both `files.export` and media download, so no additional scope is needed.
+
+If a single file's fetch fails (unsupported/binary type with no text form, export error, or a per-file timeout), the backend skips that excerpt, still lists the file by title and `webViewLink` with a "content unavailable" note, and continues — one bad file does not fail the whole search.
+
+> **Alternative considered — a passage-returning search API.** Google's newer Cloud Search / Universal Search style APIs can return matching passages directly, which would collapse the two phases into one. They are not used here: Cloud Search requires a separate indexing/data-source setup and licensing, and the Universal Search MCP path carries the same interactive-OAuth and preview-program constraints described above. The list-then-export approach stays on the GA Drive API the rest of this backend already uses. If a passage-returning API is adopted later, only the internals of `query()` change; the `BackendResult` contract does not.
 
 **Recursive folder scope**
 
-The corporate knowledge base folder tree contains nested subfolders. Drive's `'<folderId>' in parents` clause matches *direct* children only, so it does not cover nested subfolders in a single query. Rather than walking the folder tree on every request (added latency, query-size limits, cache complexity), scope is controlled by **Drive sharing**: the root folder (and, by inheritance, all its subfolders) is shared with the impersonated Workspace user, and nothing broadly else is. The backend then issues `fullText contains '<terms>'` with no `in parents` clause, and Drive naturally confines results to what the impersonated user can see — the whole shared tree, nested subfolders included. This matches the existing "service account sees = bot sees" security model.
+The corporate knowledge base folder tree contains nested subfolders. Drive's `'<folderId>' in parents` clause matches *direct* children only, so it does not cover nested subfolders in a single query.
 
-> An optional `root_folder_id` config may be added later as defense-in-depth (resolve the descendant folder set and add an `in parents` disjunction), but for MVP sharing-based scoping is the chosen approach.
+Sharing-based scoping alone is **not** sufficient and is not the chosen approach. Sharing the KB root with the impersonated user only *adds* the KB tree to that user's visible set — it does not *subtract* everything else the account can see. A `fullText contains '<terms>'` query with no `in parents` clause returns everything the impersonated user can see, which includes far more than the KB tree: files shared directly with the user, files shared via any Google Group the user belongs to, org-/domain-visible ("anyone at the domain with the link") files, and any Shared Drive the user is a member of. "Nothing broadly else is shared" is an operational assumption about one account's sharing state, not an enforced boundary — a single future direct share, group membership, or domain-wide document silently widens what every Slack user can retrieve. That is an unacceptable disclosure surface for an MVP.
+
+Therefore the MVP **enforces a root/descendant allowlist in the query itself**. A required `root_folder_id` config identifies the KB root. At startup (and on a periodic refresh) the backend resolves the full descendant folder set by walking `'<folderId>' in parents and mimeType = 'application/vnd.google-apps.folder'` from the root, caching the resulting folder-id set. Every search then issues `fullText contains '<terms>'` **conjoined with** an `in parents` disjunction over that allowlisted folder set:
+
+```
+fullText contains '<terms>' and ('<rootId>' in parents or '<childId>' in parents or …)
+```
+
+Drive returns only files that both match the terms and live directly under an allowlisted folder, so results are hard-confined to the KB tree regardless of anything else the impersonated account can see. Drive's query-length limit caps how many parent clauses fit in one request; if the descendant set exceeds that limit the backend batches the disjunction across multiple `files.list` calls and merges results. The folder-set walk runs off the request path (cached, refreshed on an interval), so per-request latency is a single search (or a small fixed number of batched searches), not a live tree walk.
+
+This is stricter than, and supersedes, the "service account sees = bot sees" model for Drive: the bot sees only the allowlisted KB tree, even if the impersonated user can see more.
+
+> A future hardening option is to move the KB into its own **isolated identity/storage boundary** — e.g. a dedicated Shared Drive that the impersonated user is a member of *and nothing else*, or a purpose-created account with zero other access — so the identity structurally cannot see unrelated content. That removes reliance on query-side filtering entirely, but is not required for MVP given the enforced allowlist above.
 
 **Interface**:
 ```python
@@ -380,30 +407,53 @@ class GoogleDriveBackend:
 
     Authenticates as a GCP service account using domain-wide
     delegation to impersonate a dedicated Workspace user, then
-    searches Drive files with `files.list` + `fullText contains`.
+    finds matching Drive files with `files.list` + `fullText
+    contains` and fetches a bounded text excerpt of each match's
+    content via `files.export` (Google-native) or `files.get`
+    with `alt=media` (binary/PDF).
     """
 
     def __init__(
         self,
         impersonate_user: str,
-        service_account_info: dict | None = None,
+        root_folder_id: str,
+        service_account_info: dict,
         scopes: tuple[str, ...] = ("https://www.googleapis.com/auth/drive.readonly",),
         max_results: int = 10,
+        max_content_bytes_per_file: int = 8192,
         timeout_seconds: float = 15.0,
     ):
         """
         Args:
             impersonate_user: Workspace user email the service account
                 impersonates via domain-wide delegation (e.g. sage-kb-chatbot@sagebase.org).
+            root_folder_id: Drive folder ID of the corporate KB root. Required.
+                The backend resolves this folder's full descendant set and
+                confines every search to it via an `in parents` allowlist, so
+                results cannot leak content the impersonated user can otherwise
+                see (direct shares, group shares, domain-wide/link shares, other
+                Shared Drives). This is an enforced boundary, not a soft
+                sharing convention.
             service_account_info: Parsed service-account key JSON (from
-                Secrets Manager). For the MVP this is required and supplies
-                the credentials. If None, credentials fall back to the
-                ambient environment (ECS task role / workload identity
-                federation) — reserved for future keyless hardening.
+                Secrets Manager). **Required for the MVP** — it supplies the
+                only credentials that can perform domain-wide delegation
+                (`.with_subject()`); the backend raises a configuration error
+                if it is missing. A keyless ambient path (ECS task role /
+                workload identity federation) is *not* yet supported: AWS
+                external-account credentials returned by ADC do not implement
+                `service_account.Credentials.with_subject()`, so they cannot
+                impersonate a Workspace user. Keyless DWD is deferred until a
+                supported signing/token-exchange flow is designed.
             scopes: OAuth scopes to request during delegation. Read-only
                 Drive scope by default.
-            max_results: Maximum number of files to return per search.
-            timeout_seconds: Per-request timeout.
+            max_results: Maximum number of matched files to fetch
+                content for and return per search.
+            max_content_bytes_per_file: Byte cap on the text excerpt
+                retrieved (exported or downloaded) per matched file.
+                Bounds both total Drive egress and the size of the
+                content handed to the Bedrock Agent.
+            timeout_seconds: Per-request timeout covering the list
+                plus the per-file content fetch/export phase.
         """
         ...
 
@@ -420,26 +470,30 @@ class GoogleDriveBackend:
 
 **Responsibilities**:
 - Obtain delegated credentials for the impersonated Workspace user using the service account (via `google-auth` `Credentials.with_subject(impersonate_user)`), refreshing access tokens automatically as they expire
-- Build a Drive `files.list` request with `q = "fullText contains '<escaped terms>'"`, `fields` limited to `files(id,name,mimeType,modifiedTime,webViewLink)`, `pageSize = max_results`, `spaces = "drive"`, `includeItemsFromAllDrives=true`, `supportsAllDrives=true` (so shared-drive content is covered)
-- Run the synchronous Google API client call in a worker thread (`asyncio.to_thread`) so it never blocks the event loop, wrapped in `asyncio.wait_for(timeout_seconds)`
-- Parse the response into a `BackendResult`: `answer` is a concise text summary of the matched files (title + snippet), and `source_urls` is the list of `webViewLink` values
+- Resolve and cache the KB folder allowlist: walk `'<folderId>' in parents and mimeType = 'application/vnd.google-apps.folder'` from `root_folder_id` at startup (and on a periodic refresh) to build the full descendant folder-id set, off the request path
+- **Phase 1 — find matches.** Build a Drive `files.list` request with `q = "fullText contains '<escaped terms>' and (<in-parents disjunction over the allowlisted folder set>)"`, `fields` limited to `files(id,name,mimeType,modifiedTime,webViewLink)`, `pageSize = max_results`, `spaces = "drive"`, `includeItemsFromAllDrives=true`, `supportsAllDrives=true` (so shared-drive content is covered). If the allowlist disjunction exceeds Drive's query-length limit, batch it across multiple `files.list` calls and merge results. The `in parents` allowlist is mandatory — never issue a bare `fullText contains` query without it
+- **Phase 2 — fetch bounded content per match.** `files.list` returns metadata only (no snippet/matching-content field), so for each matched file retrieve a truncated text excerpt of its actual content: export Google-native files (`application/vnd.google-apps.document|spreadsheet|presentation`) to `text/plain` via `files.export`, and download binary files (PDFs, uploads) via `files.get` with `alt=media`, reducing PDFs to text as needed. Truncate every excerpt to `max_content_bytes_per_file` (request a byte `Range` / stream and stop early where the client allows, so oversized files are not fully downloaded). The content fetch/export stays confined to the same `root_folder_id` allowlist as the search
+- Run all synchronous Google API client calls (list, export, media download) in worker threads (`asyncio.to_thread`) so they never block the event loop; run per-file fetches concurrently (e.g. `asyncio.gather`) and wrap the whole list-plus-fetch flow in `asyncio.wait_for(timeout_seconds)`
+- Compose the `BackendResult`: `answer` concatenates each matched file's title with its retrieved content excerpt (this is what the Bedrock Agent synthesizes and cites), and `source_urls` is the list of `webViewLink` values
+- If an individual file's fetch/export fails (unsupported type, export error, or per-file timeout), skip its excerpt, still include the file by title and `webViewLink` with a "content unavailable" note, and continue with the rest — a single bad file must not fail the whole request
 - Escape single quotes in the query terms to keep the Drive query syntax valid
-- Handle Drive-specific errors and return `BackendResult(success=False, …)`:
+- Handle Drive-specific errors from either phase (list or content fetch/export) and return `BackendResult(success=False, …)`:
   - Auth/delegation failure (misconfigured DWD, wrong scopes) → descriptive error
   - Timeout or HTTP 5xx → descriptive error
   - Rate limit (HTTP 429 / `userRateLimitExceeded`) → descriptive error
+  - Note: a *per-file* fetch/export failure is not a whole-request failure — it is handled per the skip-and-continue rule above; only a failing `files.list` or a total-timeout aborts the request
 - `health_check()` performs a minimal `files.list` with `pageSize=1` (or a token check) to confirm credentials and reachability without consuming meaningful quota
-- Access is scoped to what the impersonated user can see — grant that user access only to the corporate KB folder tree
+- Access is enforced by the query-side `root_folder_id` allowlist, not by sharing alone: results are confined to the KB tree even if the impersonated user can see unrelated content. Granting that user read access to the KB tree is still required (so the allowlisted files are readable), but it is not the security boundary
 
 **Authentication model (Path 1: service account + domain-wide delegation)**:
 1. A GCP service account is created for the bot.
 2. A Workspace super-admin authorizes that service account's client ID for the `drive.readonly` scope in the Admin console (domain-wide delegation). This is an admin-console action and is the gating external dependency.
-3. A dedicated Workspace user (e.g. `sage-kb-chatbot@sagebase.org`) is granted read access to the corporate KB Drive folder tree.
+3. A dedicated Workspace user (e.g. `sage-kb-chatbot@sagebase.org`) is granted read access to the corporate KB Drive folder tree. This makes the KB readable; it does *not* by itself bound the search — the backend's enforced `root_folder_id` allowlist confines results to the KB tree regardless of what else this user can see.
 4. At runtime the backend builds service-account credentials, calls `.with_subject("sage-kb-chatbot@sagebase.org")` to impersonate that user, and requests Drive read-only scope. All Drive API calls then run as that user.
 
 Credential sourcing (MVP decision: **service-account JSON key**):
 - **Service-account JSON key in Secrets Manager (MVP)** — the service account's key JSON is stored in Secrets Manager under `google_service_account_key`; the backend loads it and signs a JWT to obtain access tokens. Simplest to stand up. The key is a long-lived secret that must be protected and rotated periodically.
-- **Keyless via the ECS task role (future hardening)** — the ECS task assumes an identity allowed to mint service-account credentials via workload identity federation, avoiding a long-lived key. Preferred for production hardening but out of scope for the MVP because it requires a one-time AWS↔GCP federation trust setup. The `GoogleDriveBackend` interface keeps `service_account_info` optional so this can be adopted later without changing the backend contract.
+- **Keyless via the ECS task role (deferred, not a drop-in)** — the ECS task assumes an identity allowed to mint service-account credentials via workload identity federation, avoiding a long-lived key. Preferred for production hardening but **deferred beyond the MVP**, and not merely a config toggle: AWS external-account credentials returned by ADC do not implement `service_account.Credentials.with_subject()`, so they cannot perform domain-wide delegation the way the parsed service-account key can. Adopting keyless DWD requires designing a supported signing/token-exchange flow (e.g. impersonating the service account via GCP's IAM Credentials `signJwt`/`generateAccessToken` after federation, then exchanging for a delegated token), which changes how delegated credentials are obtained. Until that flow exists, `service_account_info` is a required constructor argument and there is no ambient fallback.
 
 Note that the bot's own users authenticate to Slack, not to Google — the organization's Google Workspace SSO/IdP is not involved in the backend's authentication. The backend authenticates purely as the GCP service account.
 
@@ -782,7 +836,7 @@ _Synthesized from 2 sources in 5.1s_
 - `SlackAgentApp`: Event parsing, empty question rejection, bot mention stripping
 - `BedrockAgentOrchestrator`: Return control loop, tool execution dispatch, response parsing, error handling
 - `RovoMCPBackend`: MCP response parsing, HTTP error handling
-- `GoogleDriveBackend`: `files.list` response parsing (title/snippet/webViewLink → answer + source URLs), query escaping, delegation/auth failure handling, timeout handling, `health_check` returns boolean
+- `GoogleDriveBackend`: `files.list` match parsing plus per-file content fetch/export (title + bounded content excerpt + webViewLink → answer + source URLs), excerpt byte-cap enforcement, query escaping and `in parents` allowlist, per-file fetch-failure skip-and-continue, delegation/auth failure handling, timeout handling, `health_check` returns boolean
 - Use `pytest` with `pytest-asyncio`, target 80%+ coverage
 
 ### Property-Based Tests (`hypothesis`)
@@ -876,7 +930,7 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 
 ## Security Considerations
 
-- **Authorization model**: All Sage Bionetworks employees who can interact with the Slack bot have equal access to all content the service accounts can see. There is no per-user access filtering. The Rovo MCP backend uses a dedicated Atlassian service account, and the Google Drive backend impersonates a dedicated Workspace user via domain-wide delegation — whatever those identities can access is available to every user of the bot. Scope the Google Drive service account narrowly: the impersonated user should be granted access only to the corporate KB folder tree, and domain-wide delegation should be restricted to the single `drive.readonly` scope. External collaborators must be blocked from using the bot. The Socket Mode App shall check the user's Slack User Group membership (e.g., `sage-all`) before processing any question — if the user is not in an authorized group, respond with an ephemeral message ("Sorry, this bot is only available to Sage staff") and skip processing. This check runs after event deduplication and before rate limiting. This is a deliberate MVP simplification; per-user content-level access control is out of scope.
+- **Authorization model**: All Sage Bionetworks employees who can interact with the Slack bot have equal access to all content the service accounts can see. There is no per-user access filtering. The Rovo MCP backend uses a dedicated Atlassian service account, and the Google Drive backend impersonates a dedicated Workspace user via domain-wide delegation — whatever those identities can access is available to every user of the bot. For Google Drive, "what the identity can access" is **not** limited to the KB tree by sharing alone: an impersonated Workspace user can also see files reachable through direct shares, Google Group membership, domain-/org-wide link sharing, and Shared Drive membership. Granting the impersonated user access to the KB tree adds it to that visible set but does not fence off the rest, so an unconstrained `files.list` query could expose unrelated content to every authorized Slack user. The Drive backend therefore **enforces a root/descendant folder allowlist in the query** (required `root_folder_id`, resolved descendant folder set, `in parents` disjunction conjoined with the search terms — see "Recursive folder scope"), which hard-confines results to the KB tree independent of the impersonated user's broader visibility. In addition, restrict domain-wide delegation to the single `drive.readonly` scope and impersonate only the dedicated KB user. External collaborators must be blocked from using the bot. The Socket Mode App shall check the user's Slack User Group membership (e.g., `sage-all`) before processing any question — if the user is not in an authorized group, respond with an ephemeral message ("Sorry, this bot is only available to Sage staff") and skip processing. This check runs after event deduplication and before rate limiting. This is a deliberate MVP simplification; per-user content-level access control is out of scope.
 - **No public inbound HTTP endpoint**: Socket Mode uses an outbound WebSocket connection. Only an internal/container-local HTTP health check is exposed; no public URL is reachable from the internet.
 - **Secret management**: All tokens in AWS Secrets Manager. Never in env vars or code. For the MVP the Google service-account key JSON is stored in Secrets Manager (`google_service_account_key`) alongside the Slack and Atlassian credentials. This is a long-lived credential — treat it as high-value, restrict access to the secret, and rotate it periodically. (Future hardening: keyless via ECS task role → workload identity federation removes this stored key entirely.)
 - **Domain-wide delegation blast radius**: DWD lets the service account impersonate the configured user with `drive.readonly`. Restrict the authorized scope to exactly `drive.readonly`, impersonate only the dedicated KB user, and never grant the service account broader scopes. Because the MVP uses a downloaded service-account key, that key is the single highest-value secret in the system: anyone holding it can impersonate the KB user and read all shared content until the key is rotated. Rotate it on a schedule and revoke immediately on suspected exposure.
@@ -992,11 +1046,11 @@ This ensures the WebSocket listener, health check HTTP server, and signal handle
 
 **Validates: Requirement 7.2**
 
-### Property 11: Google Drive response parsing completeness
+### Property 11: Google Drive content-fetch completeness
 
-*For any* valid `files.list` response from the Google Drive API, the GoogleDrive_Backend SHALL produce a BackendResult where success is True, answer contains text derived from every returned file (title and, when present, content snippet), and source_urls contains the `webViewLink` of every returned file.
+*For any* valid `files.list` match set paired with per-file exported/downloaded content, the GoogleDrive_Backend SHALL produce a BackendResult where success is True, answer includes every matched file's title followed by its retrieved content excerpt (each excerpt bounded by `max_content_bytes_per_file`; files whose content fetch failed appear by title with a "content unavailable" note), and source_urls contains the `webViewLink` of every matched file.
 
-**Validates: Requirement 8.2**
+**Validates: Requirements 8.2, 8.3, 8.8**
 
 ### Property 12: Answer formatting includes all required components
 
