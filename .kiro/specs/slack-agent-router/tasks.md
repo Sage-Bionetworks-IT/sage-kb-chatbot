@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implement a Slack chatbot that receives questions via Socket Mode and uses an Amazon Bedrock Agent (return control pattern) to route queries to the Rovo MCP backend, synthesize answers, and post cited responses. The system runs as a single ECS Fargate service deployed via AWS CDK (Python).
+Implement a Slack chatbot that receives questions via Socket Mode and uses an Amazon Bedrock Agent (return control pattern) to route queries to two knowledge backends — the Rovo MCP backend (Confluence/Jira) and the Google Drive backend (internal corporate knowledge base) — synthesize a single answer across both, and post cited responses. The system runs as a single ECS Fargate service deployed via AWS CDK (Python).
 
 ## Tasks
 
@@ -215,57 +215,114 @@ Implement a Slack chatbot that receives questions via Socket Mode and uses an Am
     - Run tests from 13.1 — all must pass
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
 
-- [ ] 14. Implement graceful shutdown
-  - [ ] 14.1 Implement graceful shutdown signal handling
+- [ ] 14. Set up the Google service account with domain-wide delegation (PREREQUISITE — manual)
+  - **Blocker:** This is a manual Google Workspace super-admin + GCP admin task. It cannot be automated by CDK or application code, and the Google Drive backend (task 15) cannot authenticate until it is complete. Do this first.
+  - [ ] 14.1 Provision the GCP service account and authorize domain-wide delegation
+    - Enable the Google Drive API (`drive.googleapis.com`) in the Google Cloud project
+    - Create a dedicated GCP service account for the bot and record its client ID (OAuth2 client / unique ID)
+    - In Google Workspace Admin console → Security → Access and data control → API controls → Domain-wide delegation, add the service account's client ID and authorize **exactly** the scope `https://www.googleapis.com/auth/drive.readonly` (no broader scopes)
+    - _Requirements: 8.3_
+
+  - [ ] 14.2 Provision the impersonated Workspace user and scope its Drive access
+    - Create or choose the dedicated impersonated Workspace user (e.g. `sage-kb-chatbot@sagebase.org`)
+    - Share the corporate KB root Drive folder (cascades to nested subfolders), read-only, with that user — and nothing broader, since this defines the bot's Google search scope
+    - Create a service-account key (JSON) and store it in Secrets Manager under `google_service_account_key` (MVP credential path)
+    - Record the user email as the `google_impersonate_user` config value
+    - _Requirements: 8.3, 8.4_
+
+- [ ] 15. Implement Google Drive backend
+  - [ ] 15.1 Add Google dependencies
+    - Add `google-api-python-client` and `google-auth` to `pyproject.toml`
+    - _Requirements: 8.1_
+
+  - [ ] 15.2 Write tests for GoogleDriveBackend (RED)
+    - **Property 11: Google Drive content-fetch completeness** — for any valid `files.list` result paired with per-file export/download content, the backend produces a BackendResult with success=True, an `answer` that includes each matched file's title followed by its retrieved (bounded) content excerpt, and `source_urls` containing every file's `webViewLink`
+    - **Property 11b: excerpt byte bound** — for any file content of arbitrary length, the excerpt included in the answer for that file never exceeds `max_content_bytes_per_file`
+    - Unit tests: `fullText contains` query is built with the `in parents` allowlist conjunction and single quotes escaped; Google-native files are fetched via `files.export(mimeType="text/plain")` and binary/PDF files via `files.get(alt="media")`; auth/delegation failure returns success=False; timeout (list or fetch phase) returns success=False; HTTP 5xx / rate-limit returns success=False; a single file's export/download failure is skipped (file still listed by title + `webViewLink` with a "content unavailable" note) while other files succeed; empty result set returns success=True with a "no matching documents" answer; `health_check` returns a boolean
+    - Mock the Drive API client (`files().list().execute()`, `files().export().execute()` / `files().get_media()`) and `google-auth` delegated credentials — no real network calls
+    - Tests should fail initially (no implementation yet)
+    - **Validates: Requirements 8.1, 8.2, 8.3, 8.6, 8.7, 8.8, 8.9**
+
+  - [ ] 15.3 Implement GoogleDriveBackend (GREEN)
+    - Create `src/slack_agent_router/backends/google_drive.py`
+    - Build parsed service-account credentials from `service_account_info` (required, loaded from Secrets Manager), then `.with_subject(impersonate_user)` to impersonate the dedicated Workspace user with the `drive.readonly` scope. **Require `service_account_info` for the MVP** — raise a clear configuration error if it is missing rather than falling back to ambient/ADC credentials. AWS external-account credentials returned by ADC (ECS task role / workload identity federation) do not implement `service_account.Credentials.with_subject()`, so the keyless path cannot perform domain-wide delegation as written; defer it until a supported DWD signing/token flow is designed
+    - Implement `query()` **phase 1 (find)**: build `files.list` with `q="fullText contains '<escaped terms>' and (<in-parents disjunction over the allowlisted folder set>)"`, `fields="files(id,name,mimeType,modifiedTime,webViewLink)"`, `pageSize=max_results`, `spaces="drive"`, `includeItemsFromAllDrives=true`, `supportsAllDrives=true`; batch the disjunction across calls if it exceeds Drive's query-length limit
+    - Implement `query()` **phase 2 (fetch bounded content)**: for each matched file, export Google-native types (Docs/Sheets/Slides) to `text/plain` via `files.export`, download binary/PDF types via `files.get(alt="media")` (reducing PDFs to text), and truncate each excerpt to `max_content_bytes_per_file`; run all sync client calls via `asyncio.to_thread`, per-file fetches concurrently (`asyncio.gather`), wrapped in `asyncio.wait_for(timeout_seconds)`; compose the BackendResult (answer = title + content excerpt per file, source_urls from `webViewLink`)
+    - Confine both the search and the content fetch/export to the enforced `root_folder_id` allowlist (resolved/cached descendant folder set); never issue a bare `fullText contains` query without the `in parents` clause
+    - Handle auth/delegation, timeout, HTTP 5xx, and rate-limit errors → BackendResult(success=False, …); skip-and-continue on a single file's fetch/export failure rather than failing the whole request
+    - Implement `health_check()` with a minimal `files.list` (`pageSize=1`)
+    - Run tests from 15.2 — all must pass
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9_
+
+  - [ ] 15.4 Wire GoogleDriveBackend into orchestrator, Slack app, and entrypoint (GREEN)
+    - Orchestrator: add `google_drive_backend` constructor param and register `SearchGoogleWorkspace` → GoogleDrive_Backend in the action-group→backend map; extend the Property 8 mapping test to cover it
+    - Slack app: add a progress message for the new action group ("⏳ Searching Google Drive...") in the action-group→message map
+    - `main.py`: construct `GoogleDriveBackend`, add it to the backends list, and pass it to the orchestrator
+    - Config/secrets: add required `google_impersonate_user` and `google_root_folder_id` config values plus the `google_service_account_key` secret; document them in `config.yaml.example`; add `google_service_account_key` to the required secret keys in `main.py` (`_REQUIRED_SECRET_KEYS`) and load the JSON for the backend (MVP credential path)
+    - Config/secrets: add `google_impersonate_user` config and the `google_service_account_key` secret; document in `config.yaml.example`; add `google_service_account_key` to the required secret keys in `main.py` (`_REQUIRED_SECRET_KEYS`) and load the JSON for the backend (MVP credential path)
+    - _Requirements: 5.7, 8.8_
+
+- [ ] 16. Implement CDK infrastructure stack
+  - [x] 16.1 Create CDK app and stacks (infra repo: sage-kb-chatbot-infra)
+    - CDK Python app in `sage-kb-chatbot-infra` with Network, ECS, Service, BedrockAgent, and Monitoring stacks
+    - ECS Fargate service defined at 256 CPU / 512 MB, single task
+    - _Requirements: 14.1, 14.4_
+
+  - [x] 16.2 Configure IAM, secrets, and logging (infra repo: sage-kb-chatbot-infra)
+    - ECS task role granted secretsmanager:GetSecretValue (scoped to the app secret) and bedrock:InvokeAgent; logging to CloudWatch
+    - App reads a single Secrets Manager secret (`SLACK_AGENT_ROUTER_SECRET_ID`) at runtime containing the Slack tokens and Atlassian API token; Bedrock Agent IDs passed as env vars
+    - _Requirements: 14.2, 14.3, 14.5_
+
+  - [ ] 16.3 Re-enable the ECS container health check (infra repo: sage-kb-chatbot-infra)
+    - The `container_healthcheck` block in `app.py` is currently commented out ("health check endpoint not implemented yet"); the /health endpoint is now implemented (task 13), so re-enable it against port 8080
+    - _Requirements: 14.4_
+
+  - [ ] 16.4 Add the SearchGoogleWorkspace action group to the Bedrock Agent (infra repo: sage-kb-chatbot-infra)
+    - In `bedrock_agent_stack.py`, add a second `RETURN_CONTROL` action group `SearchGoogleWorkspace` with a `find_content` function (single `query` string parameter), mirroring `SearchConfluenceJira`
+    - Update the agent `instruction` so it knows to use `SearchGoogleWorkspace` for internal corporate knowledge-base questions, and to synthesize a single blended, cited answer when both sources return results
+    - Provision the Google service-account key secret plus the `google_impersonate_user` and required `google_root_folder_id` values for the ECS service
+    - Update infra unit tests to assert both action groups are configured
+    - _Requirements: 5.7, 8.3, 8.8, 14.5_
+
+- [ ] 17. Implement graceful shutdown
+  - [ ] 17.1 Implement graceful shutdown signal handling
     - Register SIGTERM and SIGINT handlers via asyncio event loop
     - Drain in-flight requests before disconnecting WebSocket
     - Complete or abandon in-flight questions within ECS stop timeout (30s)
     - _Requirements: 13.1, 13.2_
 
-- [ ] 15. Checkpoint - Ensure all tests pass
+- [ ] 18. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 16. Implement integration tests
-  - [ ] 16.1 Write integration test for full question-to-answer flow
+- [ ] 19. Implement integration tests
+  - [ ] 19.1 Write integration test for full question-to-answer flow
     - Test the complete pipeline: ParsedQuestion → orchestrator.ask() → formatted Slack response
     - Mock Bedrock Agent API responses (return control loop with tool requests and final answer)
     - Mock backend HTTP calls (Rovo MCP) with realistic response fixtures
     - Verify progressive UX calls are made in correct order (reaction → placeholder → update → final)
     - _Requirements: 5.1, 5.2, 9.1, 4.1, 4.2, 4.3, 4.4, 4.5_
 
-  - [ ] 16.2 Write integration test for backend error scenarios
+  - [ ] 19.2 Write integration test for backend error scenarios
     - Test single backend timeout with other backend succeeding — verify partial answer is returned
     - Test all backends failing — verify "unable to find an answer" message is posted
     - Test Bedrock Agent failure after successful tool calls — verify fallback response with raw outputs
-    - _Requirements: 10.2, 10.3, 10.6, 10.7_
+    - Test blended synthesis: both Rovo and Google Drive return results — verify the agent receives both tool outputs (mock Drive `files.list` plus per-file `files.export` / `files.get(alt="media")` content alongside Rovo MCP fixtures)
+    - _Requirements: 10.2, 10.3, 10.6, 10.7, 8.8_
 
-  - [ ] 16.3 Write integration test for rate limiting and authorization flow
+  - [ ] 19.3 Write integration test for rate limiting and authorization flow
     - Test authorized user flow end-to-end: event → dedup → auth → rate limit → orchestrator → response
     - Test unauthorized user is rejected with ephemeral message before any backend calls
     - Test rate-limited user receives ephemeral message and no backend calls are made
     - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.7_
 
-  - [ ] 16.4 Write integration test for health check endpoint
+  - [ ] 19.4 Write integration test for health check endpoint
     - Start the aiohttp health server and make real HTTP requests to /health
     - Test healthy response when WebSocket mock reports connected
     - Test unhealthy response when WebSocket mock reports disconnected
     - Test backend health timeout handling with slow mock backends
     - _Requirements: 11.1, 11.2, 11.3, 11.5_
 
-- [ ] 17. Implement CDK infrastructure stack
-  - [ ] 17.1 Create CDK app and stack
-    - Create `infra/` directory with CDK Python app
-    - Define ECS Fargate service: 0.25 vCPU, 0.5 GB memory, single task
-    - Configure container health check using /health endpoint on port 8080
-    - _Requirements: 14.1, 14.4_
-
-  - [ ] 17.2 Configure IAM, secrets, and logging
-    - Define least-privilege ECS task role: secretsmanager:GetSecretValue, bedrock:InvokeAgent, logs:PutLogEvents
-    - Define Secrets Manager secrets for Slack tokens, Atlassian API token, Bedrock Agent IDs
-    - Define CloudWatch Log Group at /ecs/slack-agent-router with 90-day retention
-    - _Requirements: 14.2, 14.3, 14.5_
-
-- [ ] 18. Final checkpoint - Ensure all tests pass
+- [ ] 20. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
